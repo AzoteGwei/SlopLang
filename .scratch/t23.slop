@@ -1,0 +1,7 @@
+def gen(n):
+    r = []
+    for i in range(n):
+        r.append(i * i)
+    return r
+
+print(gen(4))

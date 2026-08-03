@@ -1,0 +1,59 @@
+try:
+    1 / 0
+except ZeroDivisionError as e:
+    print("div:", e)
+
+try:
+    [1][5]
+except IndexError as e:
+    print("idx:", e)
+
+try:
+    {"a": 1}["b"]
+except KeyError as e:
+    print("key:", e)
+
+try:
+    int("abc")
+except ValueError as e:
+    print("val:", e)
+
+try:
+    print(nosuchvar)
+except NameError as e:
+    print("name:", e)
+except Exception as e:
+    print("other:", e)
+
+try:
+    raise TypeError("custom")
+except Exception as e:
+    print("exc:", e, isinstance(e, TypeError), isinstance(e, Exception))
+
+print(isinstance(5, int), isinstance("s", int), isinstance(True, bool))
+class A:
+    pass
+class B(A):
+    pass
+b = B()
+print(isinstance(b, B), isinstance(b, A), issubclass(B, A))
+
+try:
+    try:
+        raise KeyError("k")
+    except ValueError:
+        print("wrong handler")
+    finally:
+        print("inner finally")
+except KeyError as e:
+    print("outer:", e)
+
+def gen(n):
+    r = []
+    for i in range(n):
+        r.append(i * i)
+    return r
+
+print("gen:", gen(4))
+gs = [x for x in gen(3)]
+print("comp over fn:", gs)

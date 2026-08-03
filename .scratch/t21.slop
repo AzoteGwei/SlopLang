@@ -1,0 +1,7 @@
+try:
+    try:
+        print("a")
+    except KeyError:
+        print("inner")
+except KeyError:
+    print("outer")

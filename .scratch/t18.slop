@@ -1,0 +1,7 @@
+try:
+    try:
+        raise KeyError("k")
+    except ValueError:
+        print("wrong handler")
+except KeyError as e:
+    print("outer:", e)

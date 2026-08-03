@@ -1,0 +1,6 @@
+try:
+    raise KeyError("k")
+except ValueError:
+    print("v")
+finally:
+    print("f")

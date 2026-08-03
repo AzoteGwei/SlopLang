@@ -1,0 +1,4 @@
+try:
+    print(nosuchvar)
+except NameError as e:
+    print("caught", e)

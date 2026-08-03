@@ -26,6 +26,12 @@ defmodule Slop.Scope do
     if value, do: expr_names(value, acc), else: acc
   end
 
+  defp stmt_assigned({:exprstmt, _, {:call, _, {:attr, _, {:name, _, root}, _}, _, _} = e}, acc) do
+    # statement-level method call rebinds the root name to the call result
+    acc = MapSet.put(acc, root)
+    expr_names(e, acc)
+  end
+
   defp stmt_assigned({:exprstmt, _, e}, acc), do: expr_names(e, acc)
   defp stmt_assigned({:return, _, e}, acc), do: if(e, do: expr_names(e, acc), else: acc)
   defp stmt_assigned({:pass, _}, acc), do: acc

@@ -28,7 +28,7 @@
          exc_matches/2, map_erlang_error/2, bind_params/4, unpack/2,
          defclass/4, instantiate/3, mro/1, is_slop_class/1,
          global_get/2, global_set/3, global_del/2, module_ensure_init/1, sorted_/2,
-         raise_any/1, normalize_exc/2, pattern_match/2,
+         raise_any/1, normalize_exc/2, pattern_match/2, rethrow/3,
          get_builtin/1, builtins/0, builtin_classes/0,
          with_enter/1, with_exit/2, format_spec/2, super_proxy/2,
          set_argv/1, exc_class_name/1, print_exc/2]).
@@ -142,6 +142,8 @@ map_erlang_error(throw, R) -> {'RuntimeError', [<<"uncaught throw: ", (to_repr(R
 map_erlang_error(exit, R) -> {'RuntimeError', [<<"exit: ", (to_repr(R))/binary>>]}.
 
 %% Normalize any BEAM exception into {SlopClass, Instance} for except handling.
+rethrow(C, R, ST) -> erlang:raise(C, R, ST).
+
 normalize_exc(throw, {'$slop_exc', Class, Instance}) -> {Class, Instance};
 normalize_exc(Class, Reason) ->
     case map_erlang_error(Class, Reason) of

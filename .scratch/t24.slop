@@ -1,0 +1,11 @@
+r = []
+for i in range(3):
+    r.append(i)
+print(r)
+
+def f():
+    r2 = []
+    for i in range(3):
+        r2.append(i)
+    return r2
+print(f())

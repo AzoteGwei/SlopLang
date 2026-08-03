@@ -11,7 +11,7 @@ defmodule Slop.Codegen do
   - `return`/`break`/`continue` are implemented as tagged throws caught
     by the nearest enclosing function/loop.
   """
-  import Slop.Cerl, except: [reraise: 2]
+  import Slop.Cerl, except: [reraise: 3]
   alias Slop.Scope
 
   defmodule CompileError do
@@ -250,7 +250,7 @@ defmodule Slop.Codegen do
         tuple([c_v, r_v]),
         [
           clause([tuple([lit(:throw), tuple([lit(:"$ret"), lit(ret_id), val])])], val),
-          clause([fresh()], Slop.Cerl.reraise(st_v, r_v))
+          clause([fresh()], Slop.Cerl.reraise(c_v, r_v, st_v))
         ]
       )
     )
@@ -367,11 +367,21 @@ defmodule Slop.Codegen do
   # statements
   # =====================================================================
 
-  defp compile_stmts(ctx, stmts) do
-    Enum.reduce(stmts, {lit(nil), ctx}, fn stmt, {acc, c} ->
-      {e, c2} = compile_stmt(c, stmt)
-      {seq(acc, e), c2}
-    end)
+  # A statement normally returns {cerl_expr, ctx} and is sequenced before the
+  # rest of the suite. Statements that bind merged branch variables (if/while/
+  # for/try/match at function level) instead return {{:wrap, cont}, ctx} where
+  # cont is a fun taking the rest-of-suite expression, so the destructuring
+  # lets enclose everything that follows.
+  defp compile_stmts(ctx, []), do: {lit(nil), ctx}
+
+  defp compile_stmts(ctx, [stmt | rest]) do
+    {e, ctx2} = compile_stmt(ctx, stmt)
+    {rest_e, ctx3} = compile_stmts(ctx2, rest)
+
+    case e do
+      {:wrap, cont} when is_function(cont, 1) -> {cont.(rest_e), ctx3}
+      _ -> {seq(e, rest_e), ctx3}
+    end
   end
 
   defp compile_stmt(ctx, {:pass, _}), do: {lit(nil), ctx}
@@ -561,7 +571,7 @@ defmodule Slop.Codegen do
           [tuple([lit(:throw), tuple([lit(:"$cnt"), lit(id), tuple(st2)])])],
           tuple([lit(:cnt)] ++ st2)
         ),
-        clause([fresh()], Slop.Cerl.reraise(st_v, r_v))
+        clause([fresh()], Slop.Cerl.reraise(c_v, r_v, st_v))
       ])
 
     loop_fname = fname(:"while$#{id}", n)
@@ -591,12 +601,13 @@ defmodule Slop.Codegen do
     res_var = fresh()
     aft = after_loop_body(ctx, res_var, state_names, orelse)
 
-    expr =
+    cont = fn rest ->
       letrec([{loop_fname, fun(param_vars, loop_body)}],
-        let_([res_var], apply_(loop_fname, init_vals), aft.expr)
+        let_([res_var], apply_(loop_fname, init_vals), aft.cont.(rest))
       )
+    end
 
-    {expr, aft.ctx}
+    {{:wrap, cont}, aft.ctx}
   end
 
   defp compile_stmt(ctx, {:for, _, target, iter, body, orelse}) do
@@ -643,7 +654,7 @@ defmodule Slop.Codegen do
           [tuple([lit(:throw), tuple([lit(:"$cnt"), lit(id), tuple([t2b | st2])])])],
           tuple([lit(:cnt), t2b] ++ st2)
         ),
-        clause([fresh()], Slop.Cerl.reraise(st_v, r_v))
+        clause([fresh()], Slop.Cerl.reraise(c_v, r_v, st_v))
       ])
 
     loop_fname = fname(:"for$#{id}", n + 1)
@@ -690,16 +701,17 @@ defmodule Slop.Codegen do
     res_var = fresh()
     aft = after_loop_body(ctx, res_var, state_names, orelse)
 
-    expr =
+    cont = fn rest ->
       letrec([loop_fun],
         let_(
           [res_var],
           apply_(loop_fname, [call(:slop_rt, :iter, [iter_expr]) | init_vals]),
-          aft.expr
+          aft.cont.(rest)
         )
       )
+    end
 
-    {expr, aft.ctx}
+    {{:wrap, cont}, aft.ctx}
   end
 
   # destructure {done, broke?, states...}; run else-suite when not broke
@@ -726,7 +738,8 @@ defmodule Slop.Codegen do
       (Enum.zip(vars, 3..(n + 2)//1)
        |> Enum.map(fn {v, i} -> {v, call(:erlang, :element, [lit(i), res_var])} end))
 
-    %{expr: bind_lets(bindings, inner), ctx: %{ctx | env: env_after}}
+    cont = fn rest -> bind_lets(bindings, seq(inner, rest)) end
+    %{cont: cont, ctx: %{ctx | env: env_after}}
   end
 
   defp was_unbound?(ctx, name), do: not match?({:local, _, _}, ctx.env[name])
@@ -853,8 +866,8 @@ defmodule Slop.Codegen do
     case e do
       nil ->
         case ctx.exc_info do
-          {_c, r, st} ->
-            {Slop.Cerl.reraise(st, r), ctx}
+          {c, r, st} ->
+            {Slop.Cerl.reraise(c, r, st), ctx}
 
           nil ->
             {call(:slop_rt, :raise_exc, [
@@ -1130,7 +1143,8 @@ defmodule Slop.Codegen do
       Enum.zip(vars, 1..length(vars)//1)
       |> Enum.map(fn {v, i} -> {v, call(:erlang, :element, [lit(i), t])} end)
 
-    {let_([t], result_expr, bind_lets(bindings, lit(nil))), %{before_ctx | env: env}}
+    cont = fn rest -> let_([t], result_expr, bind_lets(bindings, rest)) end
+    {{:wrap, cont}, %{before_ctx | env: env}}
   end
 
   # =====================================================================
@@ -1154,7 +1168,7 @@ defmodule Slop.Codegen do
     np_v = fresh()
 
     {handler_expr, handler_ctxs} =
-      compile_except_chain(ctx, handlers, nc_v, np_v, st_v, r_v, merge, [])
+      compile_except_chain(ctx, handlers, nc_v, np_v, c_v, st_v, r_v, merge, [])
 
     normalized =
       bind_lets(
@@ -1168,8 +1182,7 @@ defmodule Slop.Codegen do
 
     res_v = fresh()
 
-    inner =
-      try_(body_tagged, [res_v], res_v, [c_v, r_v, st_v], normalized)
+    inner = try_(body_tagged, [res_v], res_v, [c_v, r_v, st_v], normalized)
 
     tag_var = fresh()
     merge_vars = for _ <- merge, do: fresh()
@@ -1196,20 +1209,30 @@ defmodule Slop.Codegen do
 
     t = fresh()
 
-    destructured =
-      let_([t], inner,
-        bind_lets(
-          [{tag_var, call(:erlang, :element, [lit(1), t])}] ++
-            (Enum.zip(merge_vars, 2..(length(merge) + 1)//1)
-             |> Enum.map(fn {v, i} -> {v, call(:erlang, :element, [lit(i), t])} end)),
-          after_expr
-        )
+    # the whole try + tag destructuring goes in an immediately-applied fun:
+    # works around an OTP 24 beam_validator "ambiguous_catch_try_state" bug
+    # (a try whose handler rethrows, destructured inside another try's body)
+    base_cont = fn rest ->
+      apply_(
+        fun(
+          [],
+          let_([t], inner,
+            bind_lets(
+              [{tag_var, call(:erlang, :element, [lit(1), t])}] ++
+                (Enum.zip(merge_vars, 2..(length(merge) + 1)//1)
+                 |> Enum.map(fn {v, i} -> {v, call(:erlang, :element, [lit(i), t])} end)),
+              seq(after_expr, rest)
+            )
+          )
+        ),
+        []
       )
+    end
 
-    full =
+    full_cont =
       case fin do
         [] ->
-          destructured
+          base_cont
 
         _ ->
           {fin_expr, _fin_ctx} = compile_stmts(%{ctx | env: env_after}, fin)
@@ -1219,25 +1242,29 @@ defmodule Slop.Codegen do
           st2 = fresh()
           res2 = fresh()
 
-          # run finally on the success path and on the exception path
-          seq(
-            try_(destructured, [res2], res2, [c2, r2, st2], seq(fin_expr, Slop.Cerl.reraise(st2, r2))),
-            fin_expr
-          )
+          fn rest ->
+            try_(
+              base_cont.(seq(fin_expr, rest)),
+              [res2],
+              res2,
+              [c2, r2, st2],
+              seq(fin_expr, Slop.Cerl.reraise(c2, r2, st2))
+            )
+          end
       end
 
-    {full, %{ctx | env: env_after}}
+    {{:wrap, full_cont}, %{ctx | env: env_after}}
   end
 
-  defp compile_except_chain(ctx, [], _nc_v, _np_v, st_v, r_v, _merge, acc) do
-    {Slop.Cerl.reraise(st_v, r_v), Enum.reverse(acc)}
+  defp compile_except_chain(ctx, [], _nc_v, _np_v, c_v, st_v, r_v, _merge, acc) do
+    {Slop.Cerl.reraise(c_v, r_v, st_v), Enum.reverse(acc)}
   end
 
-  defp compile_except_chain(ctx, [{type_ast, name, hbody} | rest], nc_v, np_v, st_v, r_v, merge, acc) do
+  defp compile_except_chain(ctx, [{type_ast, name, hbody} | rest], nc_v, np_v, c_v, st_v, r_v, merge, acc) do
     {classes_expr, ctx} = compile_except_types(ctx, type_ast)
 
     handler_ctx =
-      %{ctx | exc_info: {nc_v, np_v, st_v}}
+      %{ctx | exc_info: {c_v, r_v, st_v}}
 
     handler_ctx =
       case name do
@@ -1250,7 +1277,7 @@ defmodule Slop.Codegen do
     tagged =
       seq(hbody_expr, tuple([lit(:handler)] ++ Enum.map(merge, &branch_value(ctx, hctx, &1))))
 
-    {next_expr, ctxs} = compile_except_chain(ctx, rest, nc_v, np_v, st_v, r_v, merge, [hctx | acc])
+    {next_expr, ctxs} = compile_except_chain(ctx, rest, nc_v, np_v, c_v, st_v, r_v, merge, [hctx | acc])
 
     expr =
       case_(call(:slop_rt, :exc_matches, [nc_v, classes_expr]), [
@@ -1325,7 +1352,7 @@ defmodule Slop.Codegen do
           if_truthy(
             call(:slop_rt, :with_exit, [mgr, call(:erlang, :element, [lit(2), norm_t])]),
             lit(nil),
-            Slop.Cerl.reraise(st_v, r_v)
+            Slop.Cerl.reraise(c_v, r_v, st_v)
           )
         )
       )
@@ -1369,7 +1396,8 @@ defmodule Slop.Codegen do
           Enum.zip(vars, 1..length(vars)//1)
           |> Enum.map(fn {v, i} -> {v, call(:erlang, :element, [lit(i), t])} end)
 
-        {let_([t], chain_expr, bind_lets(bindings, lit(nil))), %{ctx | env: env_after}}
+        cont = fn rest -> let_([t], chain_expr, bind_lets(bindings, rest)) end
+        {{:wrap, cont}, %{ctx | env: env_after}}
     end
   end
 
@@ -2227,7 +2255,10 @@ defmodule Slop.Codegen do
                 if String.to_atom(n) in @builtin_classes do
                   {lit(String.to_atom(n)), ctx}
                 else
-                  raise CompileError, message: "undefined name '#{n}'", line: 0
+                  {call(:slop_rt, :raise_exc, [
+                     lit(:NameError),
+                     lit(<<"name '#{n}' is not defined">>)
+                   ]), ctx}
                 end
             end
         end

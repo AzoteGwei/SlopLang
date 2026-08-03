@@ -34,7 +34,7 @@ defmodule Slop.Cerl do
 
   def try_(arg, vars, body, evars, handler), do: C.c_try(arg, vars, body, evars, handler)
 
-  def reraise(st, reason), do: C.c_primop(lit(:raise), [st, reason])
+  def reraise(cls, reason, st), do: C.c_primop(lit(:raw_raise), [cls, reason, st])
 
   def make_fun(m, f, a), do: call(:erlang, :make_fun, [lit(m), lit(f), lit(a)])
 
