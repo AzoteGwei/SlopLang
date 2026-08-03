@@ -22,6 +22,7 @@
 
 %% core ops used by generated code
 -export([invoke/3, call_method/4, getattr/2, getattr/3, setattr/3, delattr/2,
+         rebind/2,
          getitem/2, setitem/3, delitem/2, slice/4,
          binop/3, unary/2, truthy/1, eq/2, cmp/3, contains/2, iter/1,
          to_str/1, to_repr/1, raise_exc/2, raise_exc/1,
@@ -1657,7 +1658,7 @@ find_star([{'star'} | _], I) -> I;
 find_star([_ | T], I) -> find_star(T, I + 1).
 
 unpack_zip(Seq, Shape) ->
-    lists:flatten([unpack_one(V, S) || {V, S} <- lists:zip(Seq, Shape)]).
+    lists:append([unpack_one(V, S) || {V, S} <- lists:zip(Seq, Shape)]).
 
 unpack_one(V, S) when is_list(S) -> unpack(V, S);
 unpack_one(V, _Leaf) -> [V].
@@ -2321,3 +2322,23 @@ argv(_, _) -> raise_exc('TypeError', <<"argv() takes no arguments">>).
 exit([], _) -> halt(0);
 exit([Code], _) when is_integer(Code) -> halt(Code);
 exit(_, _) -> raise_exc('TypeError', <<"exit() takes at most 1 integer argument">>).
+
+%% statement-position method-call rebind: `recv.m(...)` rebinds recv to the
+%% call result only when the result has the same collection/object kind as the
+%% receiver (lists, dicts, sets, same-class instances). Value-returning calls
+%% (`st.pop()` -> int) leave the binding alone.
+rebind(Old, New) ->
+    case same_kind(Old, New) of
+        true -> New;
+        false -> Old
+    end.
+
+same_kind(A, B) when is_list(A), is_list(B) -> true;
+same_kind({'$set', _}, {'$set', _}) -> true;
+same_kind(A, B) when is_map(A), is_map(B) ->
+    case {maps:get('$class', A, none), maps:get('$class', B, none)} of
+        {none, none} -> true;
+        {C, C} when C =/= none -> true;
+        _ -> false
+    end;
+same_kind(_, _) -> false.

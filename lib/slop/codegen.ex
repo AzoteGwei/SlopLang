@@ -285,25 +285,29 @@ defmodule Slop.Codegen do
     bind_call = call(:slop_rt, :bind_params, [spec, d_var, a_var, k_var])
 
     env_ctx = bind_params_env(ctx, params, val_vars, va_var, kr_var)
-    {body_expr, end_ctx} = compile_stmts(env_ctx, body_stmts)
 
-    implicit =
+    # the implicit self-value of a method must be computed as the suite tail
+    # so it stays inside any rebind continuations the body wraps (a suite's
+    # own value is always nil; seq discards intermediate values)
+    {body_expr, _end_ctx} =
       if ctx.is_method and ctx.self_name do
-        case end_ctx.env[ctx.self_name] do
-          {:local, v, _} -> v
-          _ -> lit(nil)
-        end
+        compile_stmts_tail(env_ctx, body_stmts, fn bc ->
+          case bc.env[ctx.self_name] do
+            {:local, v, _} -> v
+            _ -> lit(nil)
+          end
+        end)
       else
-        lit(nil)
+        compile_stmts(env_ctx, body_stmts)
       end
 
     n_params = length(all_named)
 
     if n_params == 0 and is_nil(params.vararg) and is_nil(params.kwarg) do
-      seq(bind_call, seq(body_expr, implicit))
+      seq(bind_call, body_expr)
     else
       case_(bind_call, [
-        clause([tuple([list_pattern(val_vars), va_var, kr_var])], seq(body_expr, implicit))
+        clause([tuple([list_pattern(val_vars), va_var, kr_var])], body_expr)
       ])
     end
   end
@@ -384,6 +388,20 @@ defmodule Slop.Codegen do
     end
   end
 
+  # like compile_stmts but appends tail.(end_ctx) as the final value of the
+  # suite, kept inside any wrap continuations so rebound vars stay in scope
+  defp compile_stmts_tail(ctx, [], tail), do: {tail.(ctx), ctx}
+
+  defp compile_stmts_tail(ctx, [stmt | rest], tail) do
+    {e, ctx2} = compile_stmt(ctx, stmt)
+    {rest_e, ctx3} = compile_stmts_tail(ctx2, rest, tail)
+
+    case e do
+      {:wrap, cont} when is_function(cont, 1) -> {cont.(rest_e), ctx3}
+      _ -> {seq(e, rest_e), ctx3}
+    end
+  end
+
   defp compile_stmt(ctx, {:pass, _}), do: {lit(nil), ctx}
   defp compile_stmt(ctx, {:block, _, stmts}), do: compile_stmts(ctx, stmts)
 
@@ -434,13 +452,80 @@ defmodule Slop.Codegen do
 
   defp compile_stmt(ctx, {:assign, _, targets, value}) do
     {vexpr, ctx} = compile_expr(ctx, value)
-    {v, ctx} = ensure_var(ctx, vexpr)
 
-    Enum.reduce(targets, {lit(nil), ctx}, fn t, {acc, c} ->
-      {e, c2} = compile_assign(c, t, v)
-      {seq(acc, e), c2}
-    end)
+    unpack? =
+      ctx.locals != nil and
+        Enum.any?(targets, fn t -> match?({:tuple, _, _}, t) or match?({:list, _, _}, t) end)
+
+    rebind? =
+      ctx.locals != nil and
+        Enum.any?(targets, fn t -> match?({:attr, _, _, _}, t) or match?({:subscript, _, _, _}, t) end)
+
+    cond do
+      unpack? ->
+        compile_unpack_stmt(ctx, targets, vexpr)
+
+      rebind? ->
+        v = fresh()
+
+        {cont, ctx} =
+          Enum.reduce(targets, {fn r -> r end, ctx}, fn t, {downstream, c} ->
+            {rc, c2} = rebuild_cont(c, t, v)
+            {fn r -> rc.(downstream.(r)) end, c2}
+          end)
+
+        {{:wrap, fn rest -> let_([v], vexpr, cont.(rest)) end}, ctx}
+
+      true ->
+        {v, ctx} = ensure_var(ctx, vexpr)
+
+        Enum.reduce(targets, {lit(nil), ctx}, fn t, {acc, c} ->
+          {e, c2} = compile_assign(c, t, v)
+          {seq(acc, e), c2}
+        end)
+    end
   end
+
+  # tuple/list unpack assignment at function level: the case clause binds the
+  # leaf vars, so the rest of the suite must be nested inside the clause.
+  # For chained targets (t1 = t2 = value) each target unpacks the same value.
+  defp compile_unpack_stmt(ctx, targets, vexpr) do
+    v = fresh()
+
+    {cont, ctx} =
+      Enum.reduce(targets, {fn r -> r end, ctx}, fn target, {downstream, c} ->
+        {shape, leaves} = unpack_shape(elem(target, 2))
+        flat = call(:slop_rt, :unpack, [v, shape])
+        leaf_vars = for _ <- leaves, do: fresh()
+
+        {leaf_cont, c2} =
+          Enum.reduce(Enum.zip(leaves, leaf_vars), {fn r -> r end, c}, fn {leaf, lv}, {inner, cc} ->
+            {lc, cc2} = unpack_leaf_cont(cc, leaf, lv)
+            {fn r -> inner.(lc.(r)) end, cc2}
+          end)
+
+        cont = fn rest ->
+          case_(flat, [clause([list_pattern(leaf_vars)], leaf_cont.(downstream.(rest)))])
+        end
+
+        {cont, c2}
+      end)
+
+    full = fn rest -> let_([v], vexpr, cont.(rest)) end
+    {{:wrap, full}, ctx}
+  end
+
+  # plain local names bind the leaf var directly; everything else goes
+  # through rebuild_cont so root rebinds wrap the rest of the suite
+  defp unpack_leaf_cont(ctx, {:name, _, n}, lv) do
+    if ctx.locals != nil and not MapSet.member?(ctx.globals_decl, n) do
+      {fn r -> r end, %{ctx | env: Map.put(ctx.env, n, {:local, lv, false})}}
+    else
+      rebuild_cont(ctx, {:name, 0, n}, lv)
+    end
+  end
+
+  defp unpack_leaf_cont(ctx, leaf, lv), do: rebuild_cont(ctx, leaf, lv)
 
   defp compile_stmt(ctx, {:annassign, _, target, _ann, value}) do
     case value do
@@ -462,17 +547,31 @@ defmodule Slop.Codegen do
         {cur, ctx} = read_name(ctx, n)
         assign_name(ctx, n, call(:slop_rt, :binop, [lit(op), cur, eexpr]))
 
-      {:attr, _, _, attr} ->
+      {:attr, _, _, _} ->
         {cur, ctx} = compile_expr(ctx, target)
         newv = call(:slop_rt, :binop, [lit(op), cur, eexpr])
-        {nv, ctx} = ensure_var(ctx, newv)
-        rebuild(ctx, target, nv)
+
+        if ctx.locals == nil do
+          {nv, ctx} = ensure_var(ctx, newv)
+          rebuild(ctx, target, nv)
+        else
+          nv = fresh()
+          {rc, ctx} = rebuild_cont(ctx, target, nv)
+          {{:wrap, fn rest -> let_([nv], newv, rc.(rest)) end}, ctx}
+        end
 
       {:subscript, _, _, _} ->
         {cur, ctx} = compile_expr(ctx, target)
         newv = call(:slop_rt, :binop, [lit(op), cur, eexpr])
-        {nv, ctx} = ensure_var(ctx, newv)
-        rebuild(ctx, target, nv)
+
+        if ctx.locals == nil do
+          {nv, ctx} = ensure_var(ctx, newv)
+          rebuild(ctx, target, nv)
+        else
+          nv = fresh()
+          {rc, ctx} = rebuild_cont(ctx, target, nv)
+          {{:wrap, fn rest -> let_([nv], newv, rc.(rest)) end}, ctx}
+        end
 
       _ ->
         {lit(nil), ctx}
@@ -522,11 +621,15 @@ defmodule Slop.Codegen do
     {condc, ctx} = compile_expr(ctx, cond_e)
     merge = merge_names(ctx, [body, orelse])
 
-    {then_expr, then_ctx} = compile_stmts(ctx, body)
-    {else_expr, else_ctx} = compile_stmts(ctx, orelse)
+    {then_e, then_ctx} =
+      compile_stmts_tail(ctx, body, fn bc ->
+        tuple(Enum.map(merge, &branch_value(ctx, bc, &1)))
+      end)
 
-    then_e = seq(then_expr, tuple(Enum.map(merge, &branch_value(ctx, then_ctx, &1))))
-    else_e = seq(else_expr, tuple(Enum.map(merge, &branch_value(ctx, else_ctx, &1))))
+    {else_e, else_ctx} =
+      compile_stmts_tail(ctx, orelse, fn bc ->
+        tuple(Enum.map(merge, &branch_value(ctx, bc, &1)))
+      end)
 
     res = if_truthy(condc, then_e, else_e)
     merge_after(ctx, res, merge, [then_ctx, else_ctx])
@@ -546,9 +649,11 @@ defmodule Slop.Codegen do
     body_ctx = %{ctx | env: body_env, loop: {id, state_names, :while}}
 
     {condc, _} = compile_expr(body_ctx, cond_e)
-    {body_expr, body_end_ctx} = compile_stmts(body_ctx, body)
 
-    cont_tuple = tuple([lit(:cont)] ++ state_vars(body_end_ctx, state_names))
+    {body_expr, _body_end_ctx} =
+      compile_stmts_tail(body_ctx, body, fn bc ->
+        tuple([lit(:cont)] ++ state_vars(bc, state_names))
+      end)
 
     # try around the body catching brk/cnt for this loop id
     c_v = fresh()
@@ -588,7 +693,7 @@ defmodule Slop.Codegen do
         condc,
         let_(
           [try_res],
-          apply_(fun([], try_(seq(body_expr, cont_tuple), [res_v], res_v, [c_v, r_v, st_v], caught)), []),
+          apply_(fun([], try_(body_expr, [res_v], res_v, [c_v, r_v, st_v], caught)), []),
           driver
         ),
         tuple([lit(:done), lit(false)] ++ param_vars)
@@ -632,14 +737,21 @@ defmodule Slop.Codegen do
       Enum.zip(state_names, param_vars)
       |> Enum.reduce(ctx.env, fn {name, v}, e -> Map.put(e, name, {:local, v, false}) end)
 
-    {bind_expr, bind_ctx} =
-      compile_assign(%{ctx | env: body_env, loop: nil}, target, h_var)
+    # the target binding compiles as a regular assign statement so tuple and
+    # attr/subscript targets use the wrap machinery and keep the loop body
+    # inside their continuations
+    hdr_name = "$forh$#{id}"
 
-    body_ctx = %{bind_ctx | loop: {id, state_names, :for}} |> Map.put(:for_rest_var, t_var)
+    bind_env = Map.put(body_env, hdr_name, {:local, h_var, false})
+    bind_stmt = {:assign, 0, [target], {:name, 0, hdr_name}}
 
-    {body_expr, body_end_ctx} = compile_stmts(body_ctx, body)
+    body_ctx =
+      %{ctx | env: bind_env, loop: {id, state_names, :for}} |> Map.put(:for_rest_var, t_var)
 
-    cont_tuple = tuple([lit(:cont), t_var] ++ state_vars(body_end_ctx, state_names))
+    {body_expr, _body_end_ctx} =
+      compile_stmts_tail(body_ctx, [bind_stmt | body], fn bc ->
+        tuple([lit(:cont), t_var] ++ state_vars(bc, state_names))
+      end)
 
     n = length(state_names)
     st1 = for _ <- state_names, do: fresh()
@@ -684,7 +796,7 @@ defmodule Slop.Codegen do
                  fun(
                    [],
                    try_(
-                     seq(bind_expr, seq(body_expr, cont_tuple)),
+                     body_expr,
                      [res_v],
                      res_v,
                      [c_v, r_v, st_v],
@@ -930,24 +1042,88 @@ defmodule Slop.Codegen do
 
   # ---------- expression statements (with rebind rule) ----------
 
-  defp compile_exprstmt(ctx, {:call, _, {:attr, _, {:name, _, root}, _attr}, _, _} = e) do
-    {call_expr, ctx} = compile_expr(ctx, e)
+  # statement `recv.method(...)` rebinds recv to the call result (immutable
+  # collections return updated values). recv may be a name or an
+  # attr/subscript chain rooted at a name: `self.items.append(x)` rebinds
+  # self.items (and therefore self).
+  defp compile_exprstmt(ctx, {:call, _, recv, _, _} = e) do
+    case rebind_target(recv) do
+      nil ->
+        compile_expr(ctx, e)
 
-    case root_binding(ctx, root) do
-      :local ->
-        assign_name(ctx, root, call_expr)
+      {:name, _, root} ->
+        {call_expr, ctx} = compile_expr(ctx, e)
+        {old, ctx} = read_name(ctx, root)
+        rb = call(:slop_rt, :rebind, [old, call_expr])
 
-      :global ->
-        {call(:slop_rt, :global_set, [lit(ctx.mod), lit(String.to_atom(root)), call_expr]), ctx}
+        case root_binding(ctx, root) do
+          :local ->
+            assign_name(ctx, root, rb)
 
-      :none ->
-        {call_expr, ctx}
+          :global ->
+            {call(:slop_rt, :global_set, [lit(ctx.mod), lit(String.to_atom(root)), rb]), ctx}
+
+          :none ->
+            {call_expr, ctx}
+        end
+
+      target ->
+        {call_expr, ctx} = compile_expr(ctx, e)
+
+        case root_binding(ctx, chain_root(target)) do
+          binding when binding in [:local, :global] ->
+            {old, ctx} = compile_expr(ctx, target)
+            rb = call(:slop_rt, :rebind, [old, call_expr])
+
+            if ctx.locals != nil do
+              {rc, ctx} = rebuild_cont(ctx, target, rb)
+              {{:wrap, rc}, ctx}
+            else
+              rebuild(ctx, target, rb)
+            end
+
+          :none ->
+            {call_expr, ctx}
+        end
     end
   end
 
   defp compile_exprstmt(ctx, e) do
     compile_expr(ctx, e)
   end
+
+  # the assignable a call receiver denotes, if any. A call chain rooted at a
+  # name (`st.push(1).push(2)`) rebinds the root name to the whole-chain
+  # result; an attr/subscript chain (`self.items.append(x)`) writes back
+  # through the chain.
+  defp rebind_target({:attr, _, obj, _}) do
+    cond do
+      chain_assignable?(obj) -> obj
+      root = chain_root(obj) -> {:name, 0, root}
+      true -> nil
+    end
+  end
+
+  defp rebind_target({:call, _, recv, _, _}) do
+    case chain_root(recv) do
+      nil -> nil
+      root -> {:name, 0, root}
+    end
+  end
+
+  defp rebind_target(_), do: nil
+
+  # a name/attr/subscript chain with no calls is itself assignable
+  defp chain_assignable?({:name, _, _}), do: true
+  defp chain_assignable?({:attr, _, obj, _}), do: chain_assignable?(obj)
+  defp chain_assignable?({:subscript, _, obj, _}), do: chain_assignable?(obj)
+  defp chain_assignable?(_), do: false
+
+  defp chain_root({:name, _, n}), do: n
+  defp chain_root({:attr, _, obj, _}), do: chain_root(obj)
+  defp chain_root({:subscript, _, obj, _}), do: chain_root(obj)
+  defp chain_root({:call, _, recv, _, _}), do: chain_root(recv)
+  defp chain_root(_), do: nil
 
   defp root_binding(ctx, root) do
     case ctx.env[root] do
@@ -1016,6 +1192,41 @@ defmodule Slop.Codegen do
 
   defp rebuild(_ctx, {tag, line, _}, _value) do
     raise CompileError, message: "cannot assign to #{tag}", line: line
+  end
+
+  # assignment-as-continuation: binds value to target, wrapping the rest of
+  # the suite in the lets the rebind requires, and updating env so later
+  # reads see the new var. Avoids storing non-var exprs in env (read_name
+  # inlines env entries, which duplicated side effects and leaked
+  # clause-scoped vars).
+  defp rebuild_cont(ctx, {:name, _, n}, value_expr) do
+    cond do
+      MapSet.member?(ctx.globals_decl, n) ->
+        {fn r -> seq(call(:slop_rt, :global_set, [lit(ctx.mod), lit(String.to_atom(n)), value_expr]), r) end,
+         ctx}
+
+      ctx.locals == nil ->
+        {fn r -> seq(call(:slop_rt, :global_set, [lit(ctx.mod), lit(String.to_atom(n)), value_expr]), r) end,
+         %{ctx | mod_bindings: Map.put_new(ctx.mod_bindings, n, :value)}}
+
+      true ->
+        u = fresh()
+        {fn r -> let_([u], value_expr, r) end,
+         %{ctx | env: Map.put(ctx.env, n, {:local, u, false})}}
+    end
+  end
+
+  defp rebuild_cont(ctx, {:attr, _, obj, attr}, value_expr) do
+    {obj_e, ctx} = compile_expr(ctx, obj)
+    upd = call(:slop_rt, :setattr, [obj_e, lit(String.to_atom(attr)), value_expr])
+    rebuild_cont(ctx, obj, upd)
+  end
+
+  defp rebuild_cont(ctx, {:subscript, _, obj, idx}, value_expr) do
+    {obj_e, ctx} = compile_expr(ctx, obj)
+    {idx_e, ctx} = compile_subscript_index(ctx, idx)
+    upd = call(:slop_rt, :setitem, [obj_e, idx_e, value_expr])
+    rebuild_cont(ctx, obj, upd)
   end
 
   defp unpack_assign(ctx, ts, value) do

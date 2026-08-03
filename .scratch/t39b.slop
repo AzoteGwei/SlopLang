@@ -1,0 +1,5 @@
+class S:
+    def m(self):
+        self.x, y = (1, 2)
+        return self.x + y
+print(S().m())

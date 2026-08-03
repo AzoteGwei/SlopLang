@@ -1,0 +1,83 @@
+# more complex programs
+def quicksort(xs):
+    if len(xs) <= 1:
+        return xs
+    pivot = xs[0]
+    rest = xs[1:]
+    left = [x for x in rest if x < pivot]
+    right = [x for x in rest if x >= pivot]
+    return quicksort(left) + [pivot] + quicksort(right)
+
+print("qsort:", quicksort([5, 2, 8, 1, 9, 3]))
+
+# class hierarchy with polymorphism
+class Shape:
+    def area(self):
+        raise NotImplementedError("abstract")
+    def describe(self):
+        return self.name() + " area=" + str(self.area())
+
+class Circle(Shape):
+    def __init__(self, r):
+        self.r = r
+    def name(self):
+        return "circle"
+    def area(self):
+        return 3.14159 * self.r * self.r
+
+class Square(Shape):
+    def __init__(self, s):
+        self.s = s
+    def name(self):
+        return "square"
+    def area(self):
+        return self.s * self.s
+
+shapes = [Circle(1), Square(2), Circle(3)]
+for s in shapes:
+    print(s.describe())
+
+# exception as control flow
+def find_first(pred, xs):
+    for x in xs:
+        if pred(x):
+            return x
+    raise LookupError("none found")
+
+try:
+    print(find_first(lambda x: x > 5, [1, 2, 3]))
+except LookupError as e:
+    print("not found:", e)
+print(find_first(lambda x: x > 2, [1, 2, 3]))
+
+# state machine
+class Stack:
+    def __init__(self):
+        self.items = []
+    def push(self, x):
+        self.items.append(x)
+        return self
+    def pop(self):
+        self.items, top = self.items.pop()
+        return (self, top)
+    def size(self):
+        return len(self.items)
+
+st = Stack()
+st.push(1).push(2).push(3)
+st, a = st.pop()
+st, b = st.pop()
+print("stack:", st.size(), a, b)
+
+# memoized fib
+class Memo:
+    def __init__(self, f):
+        self.f = f
+        self.cache = {}
+    def call(self, n):
+        if n not in self.cache:
+            self.cache[n] = self.f(n)
+        return self.cache[n]
+
+mf = Memo(lambda n: n if n < 2 else mf.call(n - 1) + mf.call(n - 2))
+print("memo fib(30):", mf.call(30))

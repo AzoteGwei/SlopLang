@@ -1,0 +1,10 @@
+class Stack:
+    def __init__(self):
+        self.items = []
+    def pop(self):
+        self.items, top = self.items.pop()
+        return top
+
+st = Stack()
+st.items = [1, 2, 3]
+print(st.pop(), st.items)
