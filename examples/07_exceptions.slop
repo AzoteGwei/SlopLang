@@ -1,0 +1,44 @@
+def find_first(pred, xs):
+    for x in xs:
+        if pred(x):
+            return x
+    raise LookupError("none found")
+
+try:
+    print(find_first(lambda x: x > 5, [1, 2, 3]))
+except LookupError as e:
+    print("caught:", e)
+
+print(find_first(lambda x: x > 2, [1, 2, 3]))
+
+class AppError(Exception):
+    pass
+
+def validate(n):
+    if n < 0:
+        raise AppError("negative: " + str(n))
+    return n * 2
+
+for v in [5, -1, 7]:
+    try:
+        print("doubled:", validate(v))
+    except AppError as e:
+        print("invalid:", e)
+    finally:
+        print("checked", v)
+
+def risky():
+    raise ValueError("boom")
+
+try:
+    try:
+        risky()
+    except KeyError:
+        print("wrong handler")
+except ValueError as e:
+    print("outer got:", e)
+
+try:
+    print(10 / 0)
+except ZeroDivisionError:
+    print("division by zero caught")

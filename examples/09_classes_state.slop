@@ -1,0 +1,45 @@
+class Stack:
+    def __init__(self):
+        self.items = []
+
+    def push(self, x):
+        self.items.append(x)
+        return self
+
+    def pop(self):
+        self.items, top = self.items.pop()
+        return (self, top)
+
+    def size(self):
+        return len(self.items)
+
+st = Stack()
+st.push(1).push(2).push(3)
+st, a = st.pop()
+st, b = st.pop()
+print("stack:", st.size(), a, b)
+
+class Memo:
+    def __init__(self, f):
+        self.f = f
+        self.cache = {}
+
+    def call(self, n):
+        if n not in self.cache:
+            self.cache[n] = self.f(n)
+        return self.cache[n]
+
+mf = Memo(lambda n: n if n < 2 else mf.call(n - 1) + mf.call(n - 2))
+print("memo fib(25):", mf.call(25))
+
+class Counter:
+    def __init__(self):
+        self.n = 0
+
+    def inc(self):
+        self.n += 1
+        return self
+
+c = Counter()
+c.inc().inc().inc()
+print("counter:", c.n)

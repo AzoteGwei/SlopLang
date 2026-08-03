@@ -1,0 +1,10 @@
+caught: none found
+3
+doubled: 10
+checked 5
+invalid: negative: -1
+checked -1
+doubled: 14
+checked 7
+outer got: boom
+division by zero caught

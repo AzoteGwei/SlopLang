@@ -1,0 +1,3 @@
+stack: 1 3 2
+memo fib(25): 75025
+counter: 3

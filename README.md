@@ -9,6 +9,10 @@ SlopLang is an independent implementation. The compiler (written in Elixir)
 parses SlopLang source into its own AST and emits Core Erlang, which the
 standard Erlang compiler turns into `.beam` files.
 
+See [docs/semantics.md](docs/semantics.md) for the language semantics,
+including where SlopLang deviates from Python (immutability, the statement
+rebind rule, the pop protocol, by-value closures).
+
 ## Building
 
 Requires Erlang/OTP 24+ and Elixir 1.14+.

@@ -1,0 +1,29 @@
+pair = (1, 2)
+a, b = pair
+print("unpacked:", a, b)
+
+first, *rest = [1, 2, 3, 4]
+print("first:", first, "rest:", rest)
+
+*init, last = [1, 2, 3, 4]
+print("init:", init, "last:", last)
+
+x, (y, z) = (1, (2, 3))
+print("nested:", x, y, z)
+
+xs = [3, 1, 2]
+xs.sort()
+print("sorted via statement rebind:", xs)
+
+xs.append(9)
+print("appended:", xs)
+
+d = {"k": 1}
+d2, v = d.pop("k")
+print("dict pop:", d2, v)
+
+xs2, top = xs.pop()
+print("list pop:", xs2, top)
+
+xs3, (s1, s2) = [10, (20, 30)].pop()
+print("mixed:", xs3, s1, s2)

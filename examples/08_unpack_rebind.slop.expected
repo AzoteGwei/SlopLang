@@ -1,0 +1,9 @@
+unpacked: 1 2
+first: 1 rest: [2, 3, 4]
+init: [1, 2, 3] last: 4
+nested: 1 2 3
+sorted via statement rebind: [1, 2, 3]
+appended: [1, 2, 3, 9]
+dict pop: {} 1
+list pop: [1, 2, 3] 9
+mixed: [10] 20 30
