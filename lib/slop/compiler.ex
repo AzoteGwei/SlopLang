@@ -116,7 +116,7 @@ defmodule Slop.Compiler do
   defp parse(source) do
     case Slop.Parser.parse(source) do
       {:ok, ast} -> {:ok, ast}
-      {:error, msg, _} -> {:error, "parse error: #{msg}"}
+      {:error, line, msg} when is_integer(line) -> {:error, "parse error: line #{line}: #{msg}"}
       {:error, msg} -> {:error, "parse error: #{msg}"}
     end
   end

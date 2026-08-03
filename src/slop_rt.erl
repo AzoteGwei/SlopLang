@@ -2076,11 +2076,11 @@ sum(_, _) -> raise_exc('TypeError', <<"sum() takes 1 or 2 arguments">>).
 
 sum_(X, Start) -> lists:foldl(fun(V, Acc) -> binop("+", Acc, V) end, Start, iter(X)).
 
-min([X], Kw) when is_list(X) -> min_max(X, Kw, min);
+min([X], Kw) -> min_max(X, Kw, min);
 min(Args, Kw) when length(Args) >= 2 -> min_max(Args, Kw, min);
 min(_, _) -> raise_exc('TypeError', <<"min() requires arguments">>).
 
-max([X], Kw) when is_list(X) -> min_max(X, Kw, max);
+max([X], Kw) -> min_max(X, Kw, max);
 max(Args, Kw) when length(Args) >= 2 -> min_max(Args, Kw, max);
 max(_, _) -> raise_exc('TypeError', <<"max() requires arguments">>).
 
@@ -2155,15 +2155,29 @@ round([X, N], _) when is_integer(N) -> round2(X, N);
 round(_, _) -> raise_exc('TypeError', <<"round() takes 1 or 2 arguments">>).
 
 round2(X, 0) when is_integer(X) -> X;
+round2(X, 0) when is_float(X) -> round_half_even(X);
 round2(X, N) when is_number(X) ->
     M = int_pow(10, erlang:abs(N)),
     case N >= 0 of
-        true -> erlang:round(X * M) / M;
-        false -> erlang:round(X / M) * M
+        true -> round_half_even(X * M) / M;
+        false -> round_half_even(X / M) * M
     end;
 round2(X, _) ->
     raise_exc('TypeError', <<"round() argument must be a number, not '",
               (to_str(type_of(X)))/binary, "'">>).
+
+round_half_even(X) ->
+    F = erlang:floor(X),
+    Diff = X - F,
+    if
+        Diff < 0.5 -> F;
+        Diff > 0.5 -> F + 1;
+        true ->
+            case F rem 2 of
+                0 -> F;
+                _ -> F + 1
+            end
+    end.
 
 divmod([A, B], _) when is_number(A), is_number(B) ->
     {floordiv(A, B), pymod(A, B)};

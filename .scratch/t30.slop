@@ -1,0 +1,4 @@
+g = (x * 2 for x in range(4))
+print(g, type(g))
+for v in g:
+    print(v)
