@@ -37,7 +37,7 @@ copy({'$set', _} = S, [], _) -> S;
 copy(_, _, _) -> raise_exc('TypeError', <<"copy() takes no arguments">>).
 
 union({'$set', M}, Args, _) ->
-    lists:foldl(fun(A, Acc) -> {'$set', maps:merge(Acc, to_map(A))} end,
+    lists:foldl(fun(A, {'$set', Acc}) -> {'$set', maps:merge(Acc, to_map(A))} end,
                 {'$set', M}, Args).
 
 intersection({'$set', M}, Args, _) ->

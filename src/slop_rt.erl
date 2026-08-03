@@ -27,7 +27,7 @@
          to_str/1, to_repr/1, raise_exc/2, raise_exc/1,
          exc_matches/2, map_erlang_error/2, bind_params/4, unpack/2,
          defclass/4, instantiate/3, mro/1, is_slop_class/1,
-         global_get/2, global_set/3, global_del/2, module_ensure_init/1,
+         global_get/2, global_set/3, global_del/2, module_ensure_init/1, sorted_/2,
          raise_any/1, normalize_exc/2, pattern_match/2,
          get_builtin/1, builtins/0, builtin_classes/0,
          with_enter/1, with_exit/2, format_spec/2, super_proxy/2,
@@ -622,28 +622,28 @@ call_method(Obj, Name, Pos, Kw) when is_map(Obj) ->
     case Obj of
         #{'$class' := _C} -> invoke(getattr(Obj, Name), Pos, Kw);
         _ ->
-            case erlang:function_exported(slop_dict, Name, 3) of
+            case method_exported(slop_dict, Name) of
                 true -> apply(slop_dict, Name, [Obj, Pos, Kw]);
                 false -> attr_err(Obj, Name)
             end
     end;
 call_method(Obj, Name, Pos, Kw) when is_binary(Obj) ->
-    case erlang:function_exported(slop_str, Name, 3) of
+    case method_exported(slop_str, Name) of
         true -> apply(slop_str, Name, [Obj, Pos, Kw]);
         false -> attr_err(Obj, Name)
     end;
 call_method(Obj, Name, Pos, Kw) when is_list(Obj) ->
-    case erlang:function_exported(slop_list, Name, 3) of
+    case method_exported(slop_list, Name) of
         true -> apply(slop_list, Name, [Obj, Pos, Kw]);
         false -> attr_err(Obj, Name)
     end;
 call_method({'$set', _} = Obj, Name, Pos, Kw) ->
-    case erlang:function_exported(slop_set, Name, 3) of
+    case method_exported(slop_set, Name) of
         true -> apply(slop_set, Name, [Obj, Pos, Kw]);
         false -> attr_err(Obj, Name)
     end;
 call_method({'$slop_file', _} = Obj, Name, Pos, Kw) ->
-    case erlang:function_exported(slop_file, Name, 3) of
+    case method_exported(slop_file, Name) of
         true -> apply(slop_file, Name, [Obj, Pos, Kw]);
         false -> attr_err(Obj, Name)
     end;
@@ -652,7 +652,7 @@ call_method({'$super', _, _} = Obj, Name, Pos, Kw) ->
 call_method(Obj, Name, Pos, Kw) when is_atom(Obj) ->
     invoke(getattr(Obj, Name), Pos, Kw);
 call_method(Obj, Name, Pos, Kw) when is_tuple(Obj) ->
-    case erlang:function_exported(slop_tuple, Name, 3) of
+    case method_exported(slop_tuple, Name) of
         true -> apply(slop_tuple, Name, [Obj, Pos, Kw]);
         false -> attr_err(Obj, Name)
     end;
@@ -662,6 +662,10 @@ call_method(Obj, Name, _Pos, _Kw) ->
 attr_err(Obj, Name) ->
     raise_exc('AttributeError', <<"'", (to_str(type_of(Obj)))/binary,
               "' object has no attribute '", (atom_to_binary(Name, utf8))/binary, "'">>).
+
+method_exported(Mod, Name) ->
+    code:ensure_loaded(Mod),
+    erlang:function_exported(Mod, Name, 3).
 
 -spec getattr(term(), atom()) -> term().
 getattr(Obj, Name) when is_map(Obj) ->
@@ -688,28 +692,28 @@ getattr(Obj, Name) when is_map(Obj) ->
                     end
             end;
         _ ->
-            case erlang:function_exported(slop_dict, Name, 3) of
+            case method_exported(slop_dict, Name) of
                 true -> {'$tbound', slop_dict, Name, Obj};
                 false -> attr_err(Obj, Name)
             end
     end;
 getattr(Obj, Name) when is_binary(Obj) ->
-    case erlang:function_exported(slop_str, Name, 3) of
+    case method_exported(slop_str, Name) of
         true -> {'$tbound', slop_str, Name, Obj};
         false -> attr_err(Obj, Name)
     end;
 getattr(Obj, Name) when is_list(Obj) ->
-    case erlang:function_exported(slop_list, Name, 3) of
+    case method_exported(slop_list, Name) of
         true -> {'$tbound', slop_list, Name, Obj};
         false -> attr_err(Obj, Name)
     end;
 getattr({'$set', _} = Obj, Name) ->
-    case erlang:function_exported(slop_set, Name, 3) of
+    case method_exported(slop_set, Name) of
         true -> {'$tbound', slop_set, Name, Obj};
         false -> attr_err(Obj, Name)
     end;
 getattr({'$slop_file', _} = Obj, Name) ->
-    case erlang:function_exported(slop_file, Name, 3) of
+    case method_exported(slop_file, Name) of
         true -> {'$tbound', slop_file, Name, Obj};
         false -> attr_err(Obj, Name)
     end;
@@ -760,7 +764,7 @@ getattr(Obj, Name) when is_atom(Obj) ->
             end
     end;
 getattr(Obj, Name) when is_tuple(Obj) ->
-    case erlang:function_exported(slop_tuple, Name, 3) of
+    case method_exported(slop_tuple, Name) of
         true -> {'$tbound', slop_tuple, Name, Obj};
         false -> attr_err(Obj, Name)
     end;

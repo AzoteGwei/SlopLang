@@ -1,0 +1,40 @@
+# string methods
+s = "Hello World"
+print(s.upper(), s.lower(), s.split())
+print("  x  ".strip(), "a,b,c".split(","))
+print("-".join(["a", "b"]), "abc".replace("b", "X"))
+print("abc".startswith("ab"), "abc".endswith("c"), "abc".find("b"))
+print(str(42), int("42"), float("1.5"), bool(0), bool(1))
+
+# list methods
+xs = [3, 1, 2]
+xs.append(4)
+print(xs, xs.sort(), xs.reverse())
+xs2 = [1, 2, 3]
+print(xs2.pop())
+print(xs2)
+print(xs2.index(2), xs2.count(1))
+xs2.insert(0, 9)
+print(xs2)
+xs2.remove(9)
+print(xs2 + [7, 8], xs2 * 2)
+
+# dict methods
+d = {"a": 1}
+d["b"] = 2
+d2 = d
+print(d2, d2.get("a"), d2.get("zz", "def"))
+print(d2.keys(), d2.values(), d2.items())
+d3, v = d2.pop("a")
+print(d3, v)
+print("a" in d3, len(d2))
+
+# tuple
+t = (1, "x", [2])
+print(t[0], t[1:], len(t), t.count("x"))
+
+# set ops
+a = {1, 2, 3}
+b = {2, 3, 4}
+print(a | b, a & b, a - b)
+print(a.union(b), a.intersection(b))
