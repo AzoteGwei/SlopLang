@@ -1,0 +1,15 @@
+class Animal:
+    def __init__(self, name):
+        self.name = name
+    def speak(self):
+        return self.name + " makes a sound"
+
+class Dog(Animal):
+    def speak(self):
+        return self.name + " barks"
+    def describe(self):
+        return super().speak() + " (politely)"
+
+d = Dog("rex")
+print(d.speak())
+print(d.describe())

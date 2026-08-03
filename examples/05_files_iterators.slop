@@ -1,0 +1,13 @@
+with open(".scratch/io.txt", "w") as fh:
+    fh.write("line1\n")
+
+with open(".scratch/io.txt", "r") as fh:
+    print("file:", fh.read())
+
+nums = list(range(5))
+print("enum:", [(i, x) for i, x in enumerate(nums)])
+print("zip:", list(zip([1,2],[3,4])))
+print("map:", list(map(lambda x: x * 10, [1, 2, 3])))
+print("filter:", list(filter(lambda x: x > 1, [1, 2, 3])))
+print("sorted:", sorted([3, 1, 2]))
+print("sum:", sum([1, 2, 3]), "min:", min([1, 2, 3]), "max:", max([4, 5]))

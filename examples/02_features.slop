@@ -1,0 +1,54 @@
+def fib(n):
+    if n < 2:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+print("fib(10) =", fib(10))
+
+xs = [1, 2, 3, 4, 5]
+sq = [x * x for x in xs if x % 2 == 0]
+print("squares:", sq)
+
+d = {"a": 1, "b": 2}
+for k in d:
+    print("key:", k, "val:", d[k])
+
+s = 0
+i = 0
+while i < 5:
+    i += 1
+    s += i
+print("sum:", s)
+
+class Point:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+    def dist2(self):
+        return self.x * self.x + self.y * self.y
+
+p = Point(3, 4)
+print("dist2:", p.dist2())
+
+try:
+    raise ValueError("boom")
+except ValueError as e:
+    print("caught:", e)
+
+def greet(name="world"):
+    return "hello " + name
+
+print(greet())
+print(greet("slop"))
+
+t = (1, 2, 3)
+a, b, c = t
+print("unpack:", a + b + c)
+
+f = lambda x: x + 1
+print("lambda:", f(41))
+
+st = {1, 2, 2, 3}
+print("set size:", len(st))
+
+print(f"fstring: {fib(6)} and {sq}")

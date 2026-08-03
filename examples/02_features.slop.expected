@@ -1,0 +1,13 @@
+fib(10) = 55
+squares: [4, 16]
+key: a val: 1
+key: b val: 2
+sum: 15
+dist2: 25
+caught: boom
+hello world
+hello slop
+unpack: 6
+lambda: 42
+set size: 3
+fstring: 8 and [4, 16]

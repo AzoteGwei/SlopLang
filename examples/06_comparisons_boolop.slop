@@ -1,0 +1,7 @@
+x = 1
+print(1 < x < 3)
+print(3 > x > 0 < 5)
+a = 2
+print(1 < 2 < a)
+print(True and "yes")
+print(False or "default")
