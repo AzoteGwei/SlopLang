@@ -23,11 +23,12 @@
 %% core ops used by generated code
 -export([invoke/3, call_method/4, getattr/2, getattr/3, setattr/3, delattr/2,
          getitem/2, setitem/3, delitem/2, slice/4,
-         binop/3, unary/2, truthy/1, eq/2, contains/2, iter/1,
+         binop/3, unary/2, truthy/1, eq/2, cmp/3, contains/2, iter/1,
          to_str/1, to_repr/1, raise_exc/2, raise_exc/1,
          exc_matches/2, map_erlang_error/2, bind_params/4, unpack/2,
          defclass/4, instantiate/3, mro/1, is_slop_class/1,
-         global_get/2, global_set/3, module_ensure_init/1,
+         global_get/2, global_set/3, global_del/2, module_ensure_init/1,
+         raise_any/1, normalize_exc/2, pattern_match/2,
          get_builtin/1, builtins/0, builtin_classes/0,
          with_enter/1, with_exit/2, format_spec/2, super_proxy/2,
          set_argv/1, exc_class_name/1, print_exc/2]).
@@ -140,6 +141,201 @@ map_erlang_error(throw, {'$slop_exc', _, _} = E) -> E;
 map_erlang_error(throw, R) -> {'RuntimeError', [<<"uncaught throw: ", (to_repr(R))/binary>>]};
 map_erlang_error(exit, R) -> {'RuntimeError', [<<"exit: ", (to_repr(R))/binary>>]}.
 
+%% Normalize any BEAM exception into {SlopClass, Instance} for except handling.
+normalize_exc(throw, {'$slop_exc', Class, Instance}) -> {Class, Instance};
+normalize_exc(Class, Reason) ->
+    case map_erlang_error(Class, Reason) of
+        {'$slop_exc', C, I} -> {C, I};
+        {C, Args} -> {C, #{'$class' => C, args => Args}}
+    end.
+
+%% raise statement: accept a class (atom) or an exception instance.
+raise_any(E) when is_atom(E) ->
+    case is_exception_class(E) orelse is_slop_class(E) of
+        true ->
+            case is_exception_class(E) of
+                true -> throw({'$slop_exc', E, instantiate(E, [], #{})});
+                false -> raise_exc('TypeError',
+                        <<"exceptions must derive from BaseException">>)
+            end;
+        false ->
+            raise_exc('TypeError', <<"exceptions must derive from BaseException">>)
+    end;
+raise_any(E) when is_map(E) ->
+    case E of
+        #{'$class' := C} ->
+            case is_exception_class(C) of
+                true -> throw({'$slop_exc', C, E});
+                false -> raise_exc('TypeError',
+                        <<"exceptions must derive from BaseException">>)
+            end;
+        _ ->
+            raise_exc('TypeError', <<"exceptions must derive from BaseException">>)
+    end;
+raise_any(_) ->
+    raise_exc('TypeError', <<"exceptions must derive from BaseException">>).
+
+global_del(Mod, Name) ->
+    case persistent_term:get({slop_mod, Mod}, undefined) of
+        M when is_map(M) ->
+            persistent_term:put({slop_mod, Mod}, maps:remove(Name, M)),
+            ?NIL;
+        _ -> ?NIL
+    end.
+
+%%====================================================================
+%% Structural pattern matching (match statement)
+%%====================================================================
+%%
+%% Spec forms (plain data built by generated code):
+%%   {lit, V} | {capture} | {wild} | {value, V}
+%%   {seq, [Spec], StarIdx | nil, list | tuple}
+%%   {map, [{KeySpec, Spec}], HasRest}
+%%   {class, ClassAtom, [{AttrName, Spec}]}
+%%   {or, [Spec]} | {as, Spec}
+%% Returns {ok, [BoundValuesInTraversalOrder]} | fail.
+
+pattern_match(Spec, Val) ->
+    case pm(Spec, Val) of
+        {ok, Bs} -> {ok, Bs};
+        fail -> fail
+    end.
+
+pm({lit, V}, Val) ->
+    case eq(V, Val) of true -> {ok, []}; false -> fail end;
+pm({capture}, Val) -> {ok, [Val]};
+pm({wild}, _Val) -> {ok, []};
+pm({value, V}, Val) ->
+    case eq(V, Val) of true -> {ok, []}; false -> fail end;
+pm({seq, Specs, StarIdx, Tag}, Val) ->
+    case seq_view(Val) of
+        fail -> fail;
+        {ok, List} ->
+            case Tag of
+                tuple ->
+                    case is_tuple(Val) andalso (not ?TAGGED(Val)) of
+                        true -> pm_seq(Specs, StarIdx, List);
+                        false -> fail
+                    end;
+                list ->
+                    case is_list(Val) of
+                        true -> pm_seq(Specs, StarIdx, List);
+                        false -> fail
+                    end
+            end
+    end;
+pm({map, KeySpecs, HasRest}, Val) when is_map(Val) ->
+    case maps:is_key('$class', Val) of
+        true -> fail;
+        false -> pm_map(KeySpecs, HasRest, Val)
+    end;
+pm({map, _, _}, _) -> fail;
+pm({class, Class, AttrSpecs}, Val) ->
+    case isinstance_(Val, Class) of
+        false -> fail;
+        true -> pm_class_attrs(AttrSpecs, Val)
+    end;
+pm({'or', Specs}, Val) -> pm_or(Specs, Val);
+pm({as, Sub}, Val) ->
+    case pm(Sub, Val) of
+        {ok, Bs} -> {ok, Bs ++ [Val]};
+        fail -> fail
+    end.
+
+seq_view(V) when is_list(V) -> {ok, V};
+seq_view(V) when is_tuple(V), (not ?TAGGED(V)) -> {ok, tuple_to_list(V)};
+seq_view(_) -> fail.
+
+pm_seq(Specs, nil, List) ->
+    case length(Specs) =:= length(List) of
+        false -> fail;
+        true -> pm_seq_all(Specs, List)
+    end;
+pm_seq(Specs, StarIdx, List) ->
+    NPre = StarIdx,
+    NPost = length(Specs) - StarIdx - 1,
+    N = length(List),
+    case N < NPre + NPost of
+        true -> fail;
+        false ->
+            PreSpecs = lists:sublist(Specs, NPre),
+            PostSpecs = lists:nthtail(StarIdx + 1, Specs),
+            PreVals = lists:sublist(List, NPre),
+            StarVals = lists:sublist(List, NPre + 1, N - NPre - NPost),
+            PostVals = lists:nthtail(N - NPost, List),
+            case pm_seq_all(PreSpecs, PreVals) of
+                fail -> fail;
+                {ok, Bs1} ->
+                    case pm_seq_all(PostSpecs, PostVals) of
+                        fail -> fail;
+                        {ok, Bs2} -> {ok, Bs1 ++ [StarVals] ++ Bs2}
+                    end
+            end
+    end.
+
+pm_seq_all([], []) -> {ok, []};
+pm_seq_all([S | Ss], [V | Vs]) ->
+    case pm(S, V) of
+        fail -> fail;
+        {ok, Bs} ->
+            case pm_seq_all(Ss, Vs) of
+                fail -> fail;
+                {ok, Rest} -> {ok, Bs ++ Rest}
+            end
+    end.
+
+pm_map(KeySpecs, HasRest, Val) ->
+    case pm_map_keys(KeySpecs, Val, [], []) of
+        fail -> fail;
+        {ok, Bs, UsedKeys} ->
+            case HasRest of
+                true ->
+                    Rest = maps:without(UsedKeys, Val),
+                    {ok, Bs ++ [Rest]};
+                false ->
+                    {ok, Bs}
+            end
+    end.
+
+pm_map_keys([], _Val, BsAcc, UsedAcc) ->
+    {ok, lists:reverse(BsAcc), lists:reverse(UsedAcc)};
+pm_map_keys([{{key, K}, Sub} | Rest], Val, BsAcc, UsedAcc) ->
+    case maps:find(K, Val) of
+        error -> fail;
+        {ok, V} ->
+            case pm(Sub, V) of
+                fail -> fail;
+                {ok, Bs} ->
+                    pm_map_keys(Rest, Val, lists:reverse(Bs) ++ BsAcc, [K | UsedAcc])
+            end
+    end.
+
+pm_class_attrs(AttrSpecs, Val) ->
+    pm_class_attrs_(AttrSpecs, Val, []).
+
+pm_class_attrs_([], _Val, Acc) -> {ok, lists:reverse(Acc)};
+pm_class_attrs_([{Name, Sub} | Rest], Val, Acc) ->
+    AttrVal = try
+        getattr(Val, Name)
+    catch
+        _:_ -> '$__pm_fail__'
+    end,
+    case AttrVal of
+        '$__pm_fail__' -> fail;
+        _ ->
+            case pm(Sub, AttrVal) of
+                fail -> fail;
+                {ok, Bs} -> pm_class_attrs_(Rest, Val, lists:reverse(Bs) ++ Acc)
+            end
+    end.
+
+pm_or([], _Val) -> fail;
+pm_or([S | Ss], Val) ->
+    case pm(S, Val) of
+        fail -> pm_or(Ss, Val);
+        {ok, Bs} -> {ok, Bs}
+    end.
+
 print_exc(Class, Instance) ->
     Name = exc_class_name(Class),
     Msg = case Instance of
@@ -249,8 +445,10 @@ instantiate(Class, Pos, Kw) ->
                             Obj = #{'$class' => Class},
                             case method_lookup(Class, '__init__') of
                                 {ok, Init} ->
-                                    _ = invoke({'$bound', Init, Obj}, Pos, Kw),
-                                    Obj;
+                                    case invoke({'$bound', Init, Obj}, Pos, Kw) of
+                                        #{'$class' := _} = NewObj -> NewObj;
+                                        _ -> Obj
+                                    end;
                                 error ->
                                     case Pos =:= [] andalso map_size(Kw) =:= 0 of
                                         true -> Obj;
@@ -449,6 +647,8 @@ call_method({'$slop_file', _} = Obj, Name, Pos, Kw) ->
         true -> apply(slop_file, Name, [Obj, Pos, Kw]);
         false -> attr_err(Obj, Name)
     end;
+call_method({'$super', _, _} = Obj, Name, Pos, Kw) ->
+    invoke(getattr(Obj, Name), Pos, Kw);
 call_method(Obj, Name, Pos, Kw) when is_atom(Obj) ->
     invoke(getattr(Obj, Name), Pos, Kw);
 call_method(Obj, Name, Pos, Kw) when is_tuple(Obj) ->
@@ -819,6 +1019,7 @@ truthy(T) when is_tuple(T) -> tuple_size(T) > 0;
 truthy(_) -> true.
 
 -spec binop(string() | atom(), term(), term()) -> term().
+binop(Op, A, B) when is_binary(Op) -> binop(binary_to_list(Op), A, B);
 binop("+", A, B) -> add(A, B);
 binop("-", A, B) -> sub(A, B);
 binop("*", A, B) -> mul(A, B);
@@ -982,6 +1183,7 @@ maybe_dunder(Obj, Meth, Args) when is_map(Obj) ->
 maybe_dunder(_, _, _) -> error.
 
 -spec unary(string(), term()) -> term().
+unary(Op, A) when is_binary(Op) -> unary(binary_to_list(Op), A);
 unary("-", A) when is_number(A) -> -A;
 unary("+", A) when is_number(A) -> A;
 unary("~", A) when is_integer(A) -> bnot(A);
@@ -1039,7 +1241,8 @@ eq(_, _) -> false.
 tagged_eq({'$set', _} = A, {'$set', _} = B) -> eq(A, B);
 tagged_eq(A, B) -> A =:= B.
 
--spec cmp(string(), term(), term()) -> boolean().
+-spec cmp(binary() | string(), term(), term()) -> boolean().
+cmp(Op, A, B) when is_binary(Op) -> cmp(binary_to_list(Op), A, B);
 cmp("==", A, B) -> eq(A, B);
 cmp("!=", A, B) -> not eq(A, B);
 cmp(Op, A, B) when is_number(A), is_number(B) ->
@@ -1251,6 +1454,17 @@ tagged_str({'$slice', Lo, Hi, Step}) ->
 tagged_str({'$slop_file', _}) -> <<"<file>">>;
 tagged_str(T) -> iolist_to_binary(io_lib:format("~p", [T])).
 
+default_obj_str(#{'$class' := C, args := Args}) ->
+    case is_exception_class(C) orelse is_builtin_exception(C) of
+        true ->
+            case Args of
+                [] -> <<>>;
+                [A] -> to_str(A);
+                _ -> io_list("(", Args, ")", fun to_repr/1)
+            end;
+        false ->
+            <<"<", (exc_class_name(C))/binary, " object>">>
+    end;
 default_obj_str(#{'$class' := C}) ->
     <<"<", (exc_class_name(C))/binary, " object>">>.
 

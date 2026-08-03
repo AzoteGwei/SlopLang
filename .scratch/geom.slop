@@ -1,0 +1,10 @@
+PI = 3.14159
+
+def area(r):
+    return PI * r * r
+
+class Shape:
+    def __init__(self, name):
+        self.name = name
+    def describe(self):
+        return "shape: " + self.name

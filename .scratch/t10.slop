@@ -1,0 +1,2 @@
+with open(".scratch/io.txt", "w") as fh:
+    fh.write("line1\n")

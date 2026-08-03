@@ -1,0 +1,22 @@
+match (1, 2):
+    case (0, y):
+        print("zero", y)
+    case (1, y):
+        print("one", y)
+    case _:
+        print("other")
+
+match {"k": 5, "rest": [1, 2]}:
+    case {"k": v}:
+        print("k is", v)
+
+def deco(f):
+    def wrapper(*args, **kw):
+        return "wrapped:" + f(*args, **kw)
+    return wrapper
+
+@deco
+def hi(n):
+    return "hi " + n
+
+print(hi("bob"))

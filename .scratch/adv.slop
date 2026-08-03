@@ -1,0 +1,52 @@
+class Animal:
+    def __init__(self, name):
+        self.name = name
+    def speak(self):
+        return self.name + " makes a sound"
+
+class Dog(Animal):
+    def speak(self):
+        return self.name + " barks"
+    def describe(self):
+        return super().speak() + " (politely)"
+
+d = Dog("rex")
+print(d.speak())
+print(d.describe())
+
+match (1, 2):
+    case (0, y):
+        print("zero", y)
+    case (1, y):
+        print("one", y)
+    case _:
+        print("other")
+
+match {"k": 5, "rest": [1, 2]}:
+    case {"k": v}:
+        print("k is", v)
+
+def deco(f):
+    def wrapper(*args, **kw):
+        return "wrapped:" + f(*args, **kw)
+    return wrapper
+
+@deco
+def hi(n):
+    return "hi " + n
+
+print(hi("bob"))
+
+with open(".scratch/io.txt", "w") as fh:
+    fh.write("line1\n")
+
+with open(".scratch/io.txt", "r") as fh:
+    print("file:", fh.read())
+
+nums = list(range(5))
+print("enum:", [(i, x) for i, x in enumerate(nums)])
+print("zip:", list(zip([1,2],[3,4])))
+print("map:", list(map(lambda x: x * 10, [1, 2, 3])))
+print("filter:", list(filter(lambda x: x > 1, [1, 2, 3])))
+print("sorted:", sorted([3, 1, 2]))
+print("sum:", sum([1, 2, 3]), "min:", min([1, 2, 3]), "max:", max([4, 5]))

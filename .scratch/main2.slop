@@ -1,0 +1,8 @@
+import geom
+from geom import area
+
+print("pi:", geom.PI)
+print("area(2):", area(2))
+
+s = geom.Shape("circle")
+print(s.describe())

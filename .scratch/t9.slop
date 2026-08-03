@@ -1,0 +1,4 @@
+fh = open(".scratch/io2.txt", "w")
+fh.write("hello\n")
+fh.close()
+print(open(".scratch/io2.txt", "r").read())
