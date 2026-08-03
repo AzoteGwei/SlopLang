@@ -1101,6 +1101,7 @@ defmodule Slop.Codegen do
       []
     else
       Scope.assigned(body)
+      |> MapSet.union(Scope.rebind_roots(body))
       |> MapSet.intersection(ctx.locals)
       |> MapSet.difference(ctx.globals_decl)
       |> MapSet.to_list()
@@ -1997,7 +1998,7 @@ defmodule Slop.Codegen do
 
     inner_ctx = %{
       ctx
-      | env: %{},
+      | env: Map.drop(ctx.env, MapSet.to_list(locals)),
         locals: locals,
         globals_decl: MapSet.new(),
         loop: nil,

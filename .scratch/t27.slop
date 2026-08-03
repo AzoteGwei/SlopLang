@@ -1,0 +1,4 @@
+fns = []
+for i in range(3):
+    fns.append(lambda: i)
+print([f() for f in fns])

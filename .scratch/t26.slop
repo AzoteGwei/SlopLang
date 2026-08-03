@@ -1,0 +1,54 @@
+# closures capture by value
+def make_counter():
+    count = [0]
+    def inc():
+        count.append(count.pop()[1] + 1 if False else 1)
+        return len(count)
+    return inc
+
+c = make_counter()
+print(c(), c(), c())
+
+# closure over loop var (Python captures by reference; we capture value)
+fns = []
+for i in range(3):
+    fns.append(lambda: i)
+print("closures:", [f() for f in fns])
+
+# kwargs and defaults
+def f(a, b=2, *args, c, **kw):
+    return (a, b, args, c, kw)
+
+print(f(1, c=3))
+print(f(1, 5, 6, 7, c=8, x=1))
+
+# recursion depth
+def deep(n):
+    if n == 0:
+        return 0
+    return 1 + deep(n - 1)
+print("deep:", deep(1000))
+
+# mutual recursion
+def is_even(n):
+    if n == 0:
+        return True
+    return is_odd(n - 1)
+
+def is_odd(n):
+    if n == 0:
+        return False
+    return is_even(n - 1)
+
+print("even/odd:", is_even(10), is_odd(7))
+
+# string formatting
+x = 42
+print(f"{x:>5}|{x:<5}|{x:05}")
+print(f"{3.14159:.2f}")
+print("{0} {1}".format("a", "b"))
+
+# nested data
+d = {"users": [{"name": "a", "tags": ["x", "y"]}, {"name": "b", "tags": []}]}
+for u in d["users"]:
+    print(u["name"], len(u["tags"]))

@@ -26,12 +26,6 @@ defmodule Slop.Scope do
     if value, do: expr_names(value, acc), else: acc
   end
 
-  defp stmt_assigned({:exprstmt, _, {:call, _, {:attr, _, {:name, _, root}, _}, _, _} = e}, acc) do
-    # statement-level method call rebinds the root name to the call result
-    acc = MapSet.put(acc, root)
-    expr_names(e, acc)
-  end
-
   defp stmt_assigned({:exprstmt, _, e}, acc), do: expr_names(e, acc)
   defp stmt_assigned({:return, _, e}, acc), do: if(e, do: expr_names(e, acc), else: acc)
   defp stmt_assigned({:pass, _}, acc), do: acc
@@ -125,6 +119,40 @@ defmodule Slop.Scope do
   end
 
   defp stmt_assigned(_, acc), do: acc
+
+  # root names of statement-level method calls (subject to the rebind rule):
+  # these are NOT assignments for scoping purposes, but loops must thread them
+  def rebind_roots(stmts) do
+    Enum.reduce(stmts, MapSet.new(), &stmt_rebind_roots/2)
+  end
+
+  defp stmt_rebind_roots({:exprstmt, _, {:call, _, {:attr, _, {:name, _, root}, _}, _, _}}, acc),
+    do: MapSet.put(acc, root)
+
+  defp stmt_rebind_roots({:if, _, _, body, orelse}, acc),
+    do: acc |> MapSet.union(rebind_roots(body)) |> MapSet.union(rebind_roots(orelse))
+
+  defp stmt_rebind_roots({:while, _, _, body, orelse}, acc),
+    do: acc |> MapSet.union(rebind_roots(body)) |> MapSet.union(rebind_roots(orelse))
+
+  defp stmt_rebind_roots({:for, _, _, _, body, orelse}, acc),
+    do: acc |> MapSet.union(rebind_roots(body)) |> MapSet.union(rebind_roots(orelse))
+
+  defp stmt_rebind_roots({:try, _, body, handlers, orelse, fin}, acc) do
+    acc = MapSet.union(acc, rebind_roots(body))
+
+    acc =
+      Enum.reduce(handlers, acc, fn {_, _, hb}, a -> MapSet.union(a, rebind_roots(hb)) end)
+
+    acc |> MapSet.union(rebind_roots(orelse)) |> MapSet.union(rebind_roots(fin))
+  end
+
+  defp stmt_rebind_roots({:with, _, _, body}, acc), do: MapSet.union(acc, rebind_roots(body))
+  defp stmt_rebind_roots({:match, _, _, cases}, acc) do
+    Enum.reduce(cases, acc, fn {_, _, b, _}, a -> MapSet.union(a, rebind_roots(b)) end)
+  end
+
+  defp stmt_rebind_roots(_, acc), do: acc
 
   # all names bound by a target (for assignment/unpack purposes)
   def target_names(target, acc \\ MapSet.new())

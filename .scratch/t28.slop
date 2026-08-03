@@ -1,0 +1,7 @@
+def mk(i):
+    return lambda: i
+
+fns = []
+for i in range(3):
+    fns.append(mk(i))
+print([f() for f in fns])
