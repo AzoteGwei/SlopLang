@@ -1,0 +1,48 @@
+# str/list/dict/set/tuple interoperability
+s = "a,b,c,d"
+parts = s.split(",")
+print(parts, s.split(",", 1), "a-b-c".rsplit("-", 1))
+print("x".join(parts), ",".join([]))
+
+d = dict([("a", 1), ("b", 2)])
+print(d, dict(a=1, b=2) if False else d.get("a"))
+print({k: v * 2 for k, v in d.items()})
+
+# equality & identity
+a = [1, 2]
+b = [1, 2]
+print(a == b, a is b, a is a, None is None)
+print(1 == 1.0, "a" == "a", (1, 2) == (1, 2))
+print(None == None, True == 1)
+
+# in / not in
+print(1 in [1, 2], 3 not in [1, 2], "b" in "abc", "k" in {"k": 1})
+
+# chained methods
+print("  Hello ".strip().upper().replace("L", "R"))
+print([3, 1, 2].sort().reverse())
+
+# ternary and short circuit with side effects
+log = []
+def side(name, val):
+    log.append(name)
+    return val
+
+x = side("a", False) and side("b", True)
+print(x, log)
+y = side("c", True) or side("d", False)
+print(y, log)
+
+# unpacking variants
+a, b = 1, 2
+print(a, b)
+a, b = b, a
+print(a, b)
+first, *rest = [1, 2, 3, 4]
+print(first, rest)
+*x, last = [1, 2, 3]
+print(x, last)
+(m, (n, o)) = (1, (2, 3))
+print(m, n, o)
+for i, v in enumerate("ab"):
+    print(i, v)

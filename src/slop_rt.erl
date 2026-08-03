@@ -1678,7 +1678,7 @@ unpack_star(Seq, Shape, StarIdx) ->
     PreVals = lists:sublist(Seq, NPre),
     StarVals = lists:sublist(Seq, NPre + 1, N - NPre - NPost),
     PostVals = lists:nthtail(N - NPost, Seq),
-    lists:flatten([unpack_zip(PreVals, Pre), StarVals, unpack_zip(PostVals, Post)]).
+    unpack_zip(PreVals, Pre) ++ [StarVals] ++ unpack_zip(PostVals, Post).
 
 %%====================================================================
 %% Globals (module-level mutable state)

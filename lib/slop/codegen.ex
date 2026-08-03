@@ -586,7 +586,11 @@ defmodule Slop.Codegen do
     loop_body =
       if_truthy(
         condc,
-        let_([try_res], try_(seq(body_expr, cont_tuple), [res_v], res_v, [c_v, r_v, st_v], caught), driver),
+        let_(
+          [try_res],
+          apply_(fun([], try_(seq(body_expr, cont_tuple), [res_v], res_v, [c_v, r_v, st_v], caught)), []),
+          driver
+        ),
         tuple([lit(:done), lit(false)] ++ param_vars)
       )
 
@@ -676,12 +680,18 @@ defmodule Slop.Codegen do
              [cons(h_var, t_var)],
              let_(
                [try_res],
-               try_(
-                 seq(bind_expr, seq(body_expr, cont_tuple)),
-                 [res_v],
-                 res_v,
-                 [c_v, r_v, st_v],
-                 caught
+               apply_(
+                 fun(
+                   [],
+                   try_(
+                     seq(bind_expr, seq(body_expr, cont_tuple)),
+                     [res_v],
+                     res_v,
+                     [c_v, r_v, st_v],
+                     caught
+                   )
+                 ),
+                 []
                ),
                driver
              )
