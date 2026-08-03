@@ -1,0 +1,8 @@
+_build/
+deps/
+slopc
+.scratch/
+erl_crash.dump
+*.beam
+!.scratch
+test/e2e/*.actual

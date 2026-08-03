@@ -1,0 +1,158 @@
+module 'probe' ['module_info'/0,
+		'module_info'/1,
+		't1'/1,
+		't2'/0,
+		't3'/1,
+		't4'/0,
+		't5'/1,
+		't6'/1,
+		't7'/1]
+    attributes [%% Line 1
+		'file' =
+		    %% Line 1
+		    [{[112|[114|[111|[98|[101|[46|[101|[114|[108]]]]]]]]],1}]]
+'t1'/1 =
+    %% Line 3
+    ( fun (_0) ->
+	  %% Line 4
+	  try
+	      try
+		  apply ( _0
+			  -| [{'function',{'t1',1}}] )
+		      ()
+	      of <_1> ->
+		  case _1 of
+		    %% Line 5
+		    <'ok'> when 'true' ->
+			'good'
+		    %% Line 6
+		    <V> when 'true' ->
+			{'val',V}
+		  end
+	      catch <_5,_4,_3> ->
+		  %% Line 8
+		  case <_5,_4,_3> of
+		    <( 'throw'
+		       -| ['compiler_generated'] ),( {( 'exc'
+							-| ['compiler_generated'] ),C,_12}
+						     -| ['compiler_generated'] ),_14> when 'true' ->
+			let <ST> =
+			    primop 'build_stacktrace'
+				(_14)
+			in  {'caught',C,ST}
+		    %% Line 9
+		    <( 'error'
+		       -| ['compiler_generated'] ),R,_13> when 'true' ->
+			{'err',R}
+		    ( <_15,_16,_17> when 'true' ->
+			  primop 'raise'
+			      (_17, _16)
+		      -| ['compiler_generated'] )
+		  end
+	  of <_7> ->
+	      _7
+	  catch <_10,_9,_8> ->
+	      primop 'raise'
+		  (_8, _9)
+      -| [{'function',{'t1',1}}] )
+'t2'/0 =
+    %% Line 13
+    ( fun () ->
+	  let <F> =
+	      letrec
+		  'Loop'/2 =
+		      %% Line 14
+		      ( fun (_2,_1) ->
+			    let <Loop> = 'Loop'/2
+			    in  case <_2,_1> of
+				  <N,Acc>
+				      when call 'erlang':'>'
+					    (N,
+					     0) ->
+				      let <_0> =
+					  call 'erlang':'-'
+					      (N, 1)
+				      in  apply Loop
+					      (_0, [N|Acc])
+				  <_6,Acc> when 'true' ->
+				      Acc
+				end
+			-| [{'id',{0,0,'-t2/0-fun-0-'}}] )
+	      in  'Loop'/2
+	  in  %% Line 15
+	      apply F
+		  (3, [])
+      -| [{'function',{'t2',0}}] )
+'t3'/1 =
+    %% Line 16
+    ( fun (_0) ->
+	  case <> of
+	    ( <>
+		  when call 'erlang':'is_map'
+			(( _0
+			   -| [{'function',{'t3',1}}] )) ->
+		  ~{'a':=1,'b':=2|( _0
+		     -| [{'function',{'t3',1}}] )}~
+	      -| ['compiler_generated'] )
+	    ( <> when 'true' ->
+		  ( primop 'match_fail'
+			({'badmap',( _0
+				     -| [{'function',{'t3',1}}] )})
+		    -| [{'eval_failure','badmap'}] )
+	      -| ['compiler_generated'] )
+	  end
+      -| [{'function',{'t3',1}}] )
+'t4'/0 =
+    %% Line 17
+    ( fun () ->
+	  #{#<97>(8,1,'integer',['unsigned'|['big']]),
+	    #<98>(8,1,'integer',['unsigned'|['big']]),
+	    #<99>(8,1,'integer',['unsigned'|['big']]),
+	    #<1>(8,1,'integer',['unsigned'|['big']]),
+	    #<2>(8,1,'integer',['unsigned'|['big']]),
+	    #<0>(8,1,'integer',['unsigned'|['big']])}#
+      -| [{'function',{'t4',0}}] )
+'t5'/1 =
+    %% Line 18
+    ( fun (_0) ->
+	  case ( _0
+		 -| [{'function',{'t5',1}}] ) of
+	    <~{'a':=A}~> when 'true' ->
+		A
+	    <[H|T]> when 'true' ->
+		{H,T}
+	    <_3> when 'true' ->
+		'none'
+	  end
+      -| [{'function',{'t5',1}}] )
+'t6'/1 =
+    %% Line 19
+    ( fun (_0) ->
+	  let <A> =
+	      call 'erlang':'+'
+		  (( _0
+		     -| [{'function',{'t6',1}}] ), 1)
+	  in  let <B> =
+		  call 'erlang':'*'
+		      (A, 2)
+	      in  {A,B}
+      -| [{'function',{'t6',1}}] )
+'t7'/1 =
+    %% Line 20
+    ( fun (_0) ->
+	  apply ( _0
+		  -| [{'function',{'t7',1}}] )
+	      (1, 2)
+      -| [{'function',{'t7',1}}] )
+'module_info'/0 =
+    ( fun () ->
+	  call 'erlang':'get_module_info'
+	      ('probe')
+      -| [{'function',{'module_info',0}}] )
+'module_info'/1 =
+    ( fun (_0) ->
+	  call 'erlang':'get_module_info'
+	      ('probe', ( _0
+			  -| [{'function',{'module_info',1}}] ))
+      -| [{'function',{'module_info',1}}] )
+end
