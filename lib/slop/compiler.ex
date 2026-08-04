@@ -15,7 +15,7 @@ defmodule Slop.Compiler do
   Returns {:ok, [{module_atom, beam_binary}], main_module_atom} or {:error, msg}.
   """
   def compile_file(path, opts \\ []) do
-    search_path = Keyword.get(opts, :search_path, [Path.dirname(path)])
+    search_path = Keyword.get(opts, :search_path, default_search_path(path))
     entry = Path.expand(path)
 
     case compile_tree(entry, search_path, entry, %{}) do
@@ -30,6 +30,25 @@ defmodule Slop.Compiler do
          {:ok, forms, _exports} <- codegen(ast, modname, opts) do
       compile_forms(forms)
     end
+  end
+
+  # import resolution: the importing file's directory, then SLOP_PATH
+  # (colon-separated), then the toolchain's bundled sloplib/
+  defp default_search_path(path) do
+    env =
+      case System.get_env("SLOP_PATH") do
+        nil -> []
+        s -> String.split(s, ":", trim: true)
+      end
+
+    toolchain_lib =
+      case :escript.script_name() do
+        {:ok, script} -> [Path.join(Path.dirname(to_string(script)), "sloplib")]
+        _ -> []
+      end
+
+    ([Path.dirname(path)] ++ env ++ toolchain_lib)
+    |> Enum.uniq()
   end
 
   defp compile_tree(path, search_path, entry, seen) do

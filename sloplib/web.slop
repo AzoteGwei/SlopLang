@@ -1,0 +1,221 @@
+# web.slop — a Bottle-flavored web framework for SlopLang.
+#
+# Routes are stored in an ETS table (shared mutable state on the BEAM), so
+# decorator registration at module level works with SlopLang's immutable
+# values. Serving is handled by slop_http (gen_tcp, one process per
+# connection) in the SlopLang runtime.
+
+import erlang.ets
+import erlang.slop_http
+import erlang.erlang
+
+class HTTPError(Exception):
+    def __init__(self, status, body=""):
+        self.status = status
+        self.body = body
+        self.args = [body]
+
+class Request:
+    def __init__(self, raw):
+        self.method = raw["method"]
+        self.path = raw["path"]
+        self.query_string = raw["query"]
+        self.headers = raw["headers"]
+        self.body = raw["body"]
+        self.query = parse_query(self.query_string)
+
+class Response:
+    def __init__(self, body="", status=200, headers={}):
+        self.body = body
+        self.status = status
+        self.headers = headers
+
+def parse_query(qs):
+    out = {}
+    if qs == "":
+        return out
+    for pair in qs.split("&"):
+        if "=" in pair:
+            k, v = pair.split("=", 1)
+            out[urldecode(k)] = urldecode(v)
+        else:
+            out[urldecode(pair)] = ""
+    return out
+
+_hex = "0123456789ABCDEFabcdef"
+
+def urldecode(s):
+    s = s.replace("+", " ")
+    out = ""
+    i = 0
+    while i < len(s):
+        c = s[i]
+        if c == "%" and i + 2 < len(s) and s[i + 1] in _hex and s[i + 2] in _hex:
+            out += chr(int("0x" + s[i + 1:i + 3]))
+            i += 3
+        else:
+            out += c
+            i += 1
+    return out
+
+def json_dumps(v):
+    if v == None:
+        return "null"
+    if v == True:
+        return "true"
+    if v == False:
+        return "false"
+    t = type(v).__name__
+    if t == "int" or t == "float":
+        return str(v)
+    if t == "str":
+        return json_str(v)
+    if t == "list" or t == "tuple":
+        return "[" + ", ".join([json_dumps(x) for x in v]) + "]"
+    if t == "dict":
+        return "{" + ", ".join([json_str(str(k)) + ": " + json_dumps(v[k]) for k in v]) + "}"
+    return json_str(str(v))
+
+def json_str(s):
+    out = '"'
+    for c in s:
+        if c == '"':
+            out += '\\"'
+        elif c == "\\":
+            out += "\\\\"
+        elif c == "\n":
+            out += "\\n"
+        elif c == "\r":
+            out += "\\r"
+        elif c == "\t":
+            out += "\\t"
+        else:
+            out += c
+    return out + '"'
+
+def json_resp(data, status=200):
+    return Response(json_dumps(data), status, {"Content-Type": "application/json"})
+
+def redirect(url, status=302):
+    return Response("", status, {"Location": url})
+
+def abort(status=404, body=""):
+    raise HTTPError(status, body)
+
+def current_request():
+    r = erlang.get(atom("slop_req"))
+    if r == atom("undefined"):
+        return None
+    return r
+
+def _segments(path):
+    return [s for s in path.split("/") if s != ""]
+
+def _match(pattern, path):
+    """returns a list of path-param values in pattern order, or None"""
+    ps = _segments(pattern)
+    xs = _segments(path)
+    if len(ps) != len(xs):
+        return None
+    params = []
+    for i in range(len(ps)):
+        p = ps[i]
+        x = xs[i]
+        if len(p) > 1 and p[0] == "<" and p[-1] == ">":
+            params.append(urldecode(x))
+        elif p == x:
+            pass
+        else:
+            return None
+    return params
+
+class App:
+    def __init__(self):
+        self._tid = ets.new(atom("slop_routes"), [atom("public"), atom("bag")])
+
+    def _add(self, method, pattern, f):
+        ets.insert(self._tid, ((method, pattern), f))
+
+    def route(self, pattern, method="GET"):
+        def deco(f):
+            self._add(method, pattern, f)
+            return f
+        return deco
+
+    def get(self, pattern):
+        return self.route(pattern, "GET")
+
+    def post(self, pattern):
+        return self.route(pattern, "POST")
+
+    def put(self, pattern):
+        return self.route(pattern, "PUT")
+
+    def delete(self, pattern):
+        return self.route(pattern, "DELETE")
+
+    def _convert(self, result):
+        if isinstance(result, Response):
+            return result
+        t = type(result).__name__
+        if t == "dict" or t == "list":
+            return json_resp(result)
+        if t == "tuple":
+            if len(result) == 2:
+                body, status = result
+                return self._convert_body(body, status, {})
+            if len(result) == 3:
+                body, status, headers = result
+                return self._convert_body(body, status, headers)
+        if t == "str":
+            return Response(result, 200, {})
+        if t == "int":
+            return Response(str(result), 200, {})
+        return Response(str(result), 200, {})
+
+    def _convert_body(self, body, status, headers):
+        r = self._convert(body)
+        r.status = status
+        r.headers.update(headers)
+        return r
+
+    def _find(self, method, path):
+        best = None
+        for entry in ets.tab2list(self._tid):
+            mp, f = entry
+            m, pattern = mp
+            if m == method:
+                params = _match(pattern, path)
+                if params != None:
+                    # prefer patterns with fewer params (more specific)
+                    score = len(params)
+                    if best == None or score < best[0]:
+                        best = (score, f, params)
+        if best == None:
+            return None
+        return (best[1], best[2])
+
+    def handle(self, raw):
+        req = Request(raw)
+        erlang.put(atom("slop_req"), req)
+        try:
+            hit = self._find(req.method, req.path)
+            if hit == None:
+                resp = Response("not found: " + req.method + " " + req.path + "\n", 404, {})
+            else:
+                f, params = hit
+                result = f(*params, **req.query)
+                resp = self._convert(result)
+        except HTTPError as e:
+            resp = Response(e.body if e.body != "" else "error " + str(e.status) + "\n",
+                            e.status, {})
+        return {"status": resp.status, "headers": resp.headers, "body": resp.body}
+
+    def run(self, host="127.0.0.1", port=8080):
+        handler = lambda raw: self.handle(raw)
+        result = slop_http.start(host, port, handler)
+        if result[0] == atom("ok"):
+            print("SlopLang web: listening on http://" + host + ":" + str(result[1]))
+            slop_http.wait()
+        else:
+            print("SlopLang web: failed to start:", result[1])

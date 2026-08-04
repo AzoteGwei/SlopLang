@@ -1,0 +1,53 @@
+from web import App, json_resp, redirect, abort, current_request
+
+app = App()
+
+@app.get("/")
+def index():
+    return "Hello from SlopLang web!\n"
+
+@app.get("/hello/<name>")
+def hello(name):
+    return json_resp({"hello": name})
+
+@app.get("/search")
+def search(q):
+    return json_resp({"q": q, "results": [q + " one", q + " two"]})
+
+@app.get("/add")
+def add(a, b):
+    return json_resp({"sum": int(a) + int(b)})
+
+@app.post("/echo")
+def echo():
+    req = current_request()
+    return json_resp({"you_said": req.body})
+
+@app.post("/sum")
+def sum_post():
+    req = current_request()
+    parts = req.body.split(",")
+    return json_resp({"sum": sum([int(x) for x in parts])})
+
+@app.get("/slow/<ms>")
+def slow(ms):
+    sleep(int(ms))
+    return "slow done after " + ms + "ms\n"
+
+@app.get("/redirect")
+def go():
+    return redirect("/")
+
+@app.get("/missing")
+def missing():
+    abort(418, "teapot says no\n")
+
+@app.get("/tuple")
+def tup():
+    return ("created!\n", 201, {"X-Custom": "slop"})
+
+args = argv()
+if len(args) > 1:
+    app.run(port=int(args[1]))
+else:
+    app.run(port=8080)

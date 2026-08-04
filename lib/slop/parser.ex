@@ -669,7 +669,7 @@ defmodule Slop.Parser do
          {:ok, body, st} <- suite(st) do
       orelse_result =
         case peek(st) do
-          {:kw, _, "elif"} -> if_stmt(advance(st))
+          {:kw, _, "elif"} -> if_stmt(st)
           {:kw, _, "else"} ->
             st = advance(st)
 
@@ -681,6 +681,7 @@ defmodule Slop.Parser do
         end
 
       case orelse_result do
+        {:ok, {:if, _, _, _, _} = nested, st} -> {:ok, {:if, line, cond_e, body, [nested]}, st}
         {:ok, orelse, st} -> {:ok, {:if, line, cond_e, body, orelse}, st}
         e -> e
       end
