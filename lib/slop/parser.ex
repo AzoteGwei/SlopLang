@@ -164,10 +164,12 @@ defmodule Slop.Parser do
         compound_or_simple(st)
 
       {:kw, _, "match"} ->
-        # `match` is a soft keyword: `match = ...` (and `match.x = ...`,
-        # `match(...)`) is an ordinary statement, `match subj:` a match
+        # `match` is a soft keyword: `match = ...` (and `match.x = ...`)
+        # is an ordinary statement; `match subj:` a match. Note
+        # `match(...)` stays a match statement (same as Python's
+        # subject-preference rule).
         case peek2(st) do
-          {:op, _, op} when op in ["=", ".", "("] -> simple_stmt_line(st)
+          {:op, _, op} when op in ["=", "."] -> simple_stmt_line(st)
           _ -> compound_or_simple(st)
         end
 
