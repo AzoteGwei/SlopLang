@@ -1,0 +1,175 @@
+# itertools — iterator building blocks.
+# Python itertools-style API built on SlopLang streams (sloplib/stream.slop):
+# everything lazy returns a stream, everything eager returns a list.
+# Deviations: no tee/product/permutations/combinations family yet (eager
+# combinatorics are better served by list comprehensions here); cycle
+# materializes its source once (it must, to repeat it).
+
+import stream as _s
+
+def count(start=0, step=1):
+    return _s.iterate(lambda x: x + step, start)
+
+def repeat(x, times=None):
+    if times == None:
+        return _s.iterate(lambda v: v, x)
+    return _s.take(times, _s.iterate(lambda v: v, x))
+
+def cycle(seq):
+    items = list(seq)
+    if len(items) == 0:
+        raise ValueError("cycle() of an empty sequence")
+    return _s.stream(_cycle_step(items, 0))
+
+def _cycle_step(items, i):
+    def step():
+        if i >= len(items):
+            return (items[0], _cycle_step(items, 1))
+        return (items[i], _cycle_step(items, i + 1))
+    return step
+
+def chain(*seqs):
+    return _s.stream(_chain_step([seq_init(x) for x in seqs]))
+
+def _chain_step(states):
+    def step():
+        cur = states
+        while cur != []:
+            r = seq_next(cur[0])
+            if r == atom("$end"):
+                cur = cur[1:]
+            else:
+                (h, st2) = r
+                return (h, _chain_step([st2] + cur[1:]))
+        return _s.stream_end()
+    return step
+
+def islice(seq, *args):
+    # islice(stop) or islice(start, stop[, step])
+    a = list(args)
+    start = 0
+    step = 1
+    if len(a) == 1:
+        stop = a[0]
+    else:
+        start = a[0]
+        stop = a[1]
+        if len(a) > 2:
+            step = a[2]
+    return _s.stream(_islice_step(seq_init(seq), start, stop, step, 0))
+
+def _islice_step(st, start, stop, step, i):
+    def f():
+        if i >= stop:
+            return _s.stream_end()
+        r = seq_next(st)
+        if r == atom("$end"):
+            return _s.stream_end()
+        (h, st2) = r
+        if i < start:
+            return _islice_step(st2, start, stop, step, i + 1)()
+        if (i - start) % step == 0:
+            return (h, _islice_step(st2, start, stop, step, i + 1))
+        return _islice_step(st2, start, stop, step, i + 1)()
+    return f
+
+def takewhile(pred, seq):
+    return _s.stream(_takewhile_step(pred, seq_init(seq)))
+
+def _takewhile_step(pred, st):
+    def step():
+        r = seq_next(st)
+        if r == atom("$end"):
+            return _s.stream_end()
+        (h, st2) = r
+        if pred(h):
+            return (h, _takewhile_step(pred, st2))
+        return _s.stream_end()
+    return step
+
+def dropwhile(pred, seq):
+    return _s.stream(_drop_step(pred, seq_init(seq), True))
+
+def _drop_step(pred, st, dropping):
+    def step():
+        cur = st
+        drop = dropping
+        while True:
+            r = seq_next(cur)
+            if r == atom("$end"):
+                return _s.stream_end()
+            (h, st2) = r
+            cur = st2
+            if drop and pred(h):
+                pass
+            else:
+                drop = False
+                return (h, _drop_step(pred, cur, False))
+    return step
+
+def accumulate(seq, func=None, initial=None):
+    st = seq_init(seq)
+    if initial == None:
+        r = seq_next(st)
+        if r == atom("$end"):
+            return _s.stream(lambda: _s.stream_end())
+        (h, st2) = r
+        acc = h
+        st = st2
+    else:
+        acc = initial
+    if func == None:
+        func = lambda a, b: a + b
+    return _s.stream(_accum_step(func, acc, st))
+
+def _accum_step(func, acc, st):
+    def step():
+        r = seq_next(st)
+        if r == atom("$end"):
+            return (acc, lambda: _s.stream_end())
+        (h, st2) = r
+        return (acc, _accum_step(func, func(acc, h), st2))
+    return step
+
+def pairwise(seq):
+    st = seq_init(seq)
+    r = seq_next(st)
+    if r == atom("$end"):
+        return _s.stream(lambda: _s.stream_end())
+    (h, st2) = r
+    return _s.stream(_pair_step(h, st2))
+
+def _pair_step(prev, st):
+    def step():
+        r = seq_next(st)
+        if r == atom("$end"):
+            return _s.stream_end()
+        (h, st2) = r
+        return ((prev, h), _pair_step(h, st2))
+    return step
+
+def zip_longest(*seqs, **kw):
+    fillvalue = None
+    if "fillvalue" in kw:
+        fillvalue = kw["fillvalue"]
+    return _s.stream(_zipl_step([seq_init(x) for x in seqs], fillvalue))
+
+def _zipl_step(states, fill):
+    def step():
+        outs = []
+        nexts = []
+        ended = 0
+        for st in states:
+            r = seq_next(st)
+            if r == atom("$end"):
+                ended = ended + 1
+                outs = outs + [fill]
+                nexts = nexts + [st]
+            else:
+                (h, st2) = r
+                outs = outs + [h]
+                nexts = nexts + [st2]
+        if ended == len(states):
+            return _s.stream_end()
+        return (tuple(outs), _zipl_step(nexts, fill))
+    return step

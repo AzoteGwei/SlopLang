@@ -1,0 +1,84 @@
+# collections — container datatypes.
+# Python collections-style, adapted to SlopLang immutability: Counter and
+# defaultdict are wrapper classes over plain dicts (methods that "mutate"
+# rebind through the implicit-self rule, like everywhere in SlopLang).
+# Deviations: no OrderedDict (SlopLang dicts are unordered BEAM maps —
+# document, don't fake), no namedtuple/deque/ChainMap yet.
+
+class Counter:
+    def __init__(self, items=None):
+        self._counts = {}
+        if items != None:
+            self.update(items)
+
+    def update(self, items):
+        for x in items:
+            self._counts[x] = self._counts.get(x, 0) + 1
+
+    def __getitem__(self, k):
+        # missing elements count as zero, like Python's Counter
+        return self._counts.get(k, 0)
+
+    def __setitem__(self, k, v):
+        self._counts[k] = v
+
+    def __contains__(self, k):
+        return k in self._counts and self._counts[k] != 0
+
+    def most_common(self, n=None):
+        pairs = [(k, self._counts[k]) for k in self._counts]
+        pairs = sorted(pairs, key=lambda p: 0 - p[1])
+        if n == None:
+            return pairs
+        return pairs[:n]
+
+    def elements(self):
+        out = []
+        for k in self._counts:
+            for _ in range(self._counts[k]):
+                out = out + [k]
+        return out
+
+    def total(self):
+        return sum([self._counts[k] for k in self._counts])
+
+    def get(self, k, default=0):
+        return self._counts.get(k, default)
+
+    def __repr__(self):
+        parts = []
+        for k, v in self.most_common():
+            parts = parts + [repr(k) + ": " + str(v)]
+        return "Counter({" + ", ".join(parts) + "})"
+
+class defaultdict:
+    def __init__(self, factory, initial=None):
+        self._factory = factory
+        self._d = {}
+        if initial != None:
+            self._d.update(initial)
+
+    def __getitem__(self, k):
+        if k in self._d:
+            return self._d[k]
+        v = self._factory()
+        self._d[k] = v
+        return v
+
+    def __setitem__(self, k, v):
+        self._d[k] = v
+
+    def __contains__(self, k):
+        return k in self._d
+
+    def get(self, k, default=None):
+        return self._d.get(k, default)
+
+    def keys(self):
+        return list(self._d)
+
+    def items(self):
+        return [(k, self._d[k]) for k in self._d]
+
+    def __repr__(self):
+        return "defaultdict(" + repr(self._d) + ")"

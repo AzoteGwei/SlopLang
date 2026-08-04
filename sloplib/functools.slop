@@ -1,0 +1,60 @@
+# functools — higher-order functions and callable tools.
+# PEP 309 partial plus reduce/cache helpers. Deviations: partial objects
+# are plain SlopLang callables (no __wrapped__ introspection); cache is
+# backed by an ETS table per wrapper (shared mutable memo state, keyed by
+# the argument tuple) rather than an instance dict; lru eviction is not
+# implemented (unbounded cache, documented).
+
+import erlang.ets as _ets
+
+class partial:
+    def __init__(self, func, *args, **kwargs):
+        self.func = func
+        self.args = list(args)
+        self.kwargs = dict(kwargs)
+
+    def __call__(self, *more, **morekw):
+        kw = dict(self.kwargs)
+        kw.update(morekw)
+        return self.func(*(self.args + list(more)), **kw)
+
+def reduce(func, seq, initial=None):
+    items = list(seq)
+    if initial == None:
+        if len(items) == 0:
+            raise TypeError("reduce() of empty iterable with no initial value")
+        acc = items[0]
+        items = items[1:]
+    else:
+        acc = initial
+    for x in items:
+        acc = func(acc, x)
+    return acc
+
+def cache(func):
+    tid = _ets.new(atom("slop_functools_cache"), [atom("public"), atom("set")])
+    def wrapper(*args, **kwargs):
+        key = (tuple(args), tuple(sorted([(k, kwargs[k]) for k in kwargs])))
+        hit = _ets.lookup(tid, key)
+        if hit != []:
+            return hit[0][1]
+        v = func(*args, **kwargs)
+        _ets.insert(tid, (key, v))
+        return v
+    return wrapper
+
+def lru_cache(maxsize=128):
+    # unbounded cache; maxsize is accepted for signature compatibility and
+    # documented as not enforced
+    def deco(func):
+        return cache(func)
+    return deco
+
+def compose(*funcs):
+    fs = list(funcs)
+    def composed(x):
+        acc = x
+        for f in reversed(fs):
+            acc = f(acc)
+        return acc
+    return composed

@@ -1,0 +1,95 @@
+# os — operating system interface (selective port).
+# Maps onto OTP :file/:os/:filename. Deliberately N/A (not faked): the
+# POSIX process model (fork/exec/wait/popen), uid/gid/permissions bits,
+# signals, and CPython-style environ mutation. Use concurrency builtins
+# for processes and erlang interop for the rest.
+
+import erlang.file as _f
+import erlang.os as _os
+import erlang.filename as _fn
+import erlang.unicode as _u
+import erlang.erlang as _e
+
+def getcwd():
+    return _u.characters_to_binary(_f.get_cwd()[1])
+
+def listdir(path="."):
+    r = _f.list_dir(path)
+    if r[0] == atom("error"):
+        raise OSError("listdir failed: " + str(r[1]))
+    return [_u.characters_to_binary(p) for p in r[1]]
+
+def getenv(name, default=None):
+    r = _os.getenv(_u.characters_to_list(name))
+    if r == False:
+        return default
+    return _u.characters_to_binary(r)
+
+def remove(path):
+    r = _f.delete(path)
+    if r[0] == atom("error"):
+        raise OSError("remove failed: " + str(r[1]))
+    return None
+
+def rename(src, dst):
+    r = _f.rename(src, dst)
+    if r[0] == atom("error"):
+        raise OSError("rename failed: " + str(r[1]))
+    return None
+
+def mkdir(path):
+    r = _f.make_dir(path)
+    if r[0] == atom("error"):
+        raise OSError("mkdir failed: " + str(r[1]))
+    return None
+
+def makedirs(path):
+    r = _f.make_path(path)
+    if r[0] == atom("error"):
+        raise OSError("makedirs failed: " + str(r[1]))
+    return None
+
+def system_time():
+    return _e.system_time(atom("second"))
+
+class _Path:
+    def join(self, *parts):
+        return _fn.join(list(parts))
+
+    def basename(self, p):
+        return _fn.basename(p)
+
+    def dirname(self, p):
+        return _fn.dirname(p)
+
+    def split(self, p):
+        return (self.dirname(p), self.basename(p))
+
+    def splitext(self, p):
+        ext = _fn.extension(p)
+        root = _fn.rootname(p)
+        return (root, ext)
+
+    def exists(self, p):
+        r = _f.read_file_info(p)
+        return r[0] == atom("ok")
+
+    def isfile(self, p):
+        r = _f.read_file_info(p)
+        if r[0] != atom("ok"):
+            return False
+        return r[1][2] == atom("regular")
+
+    def isdir(self, p):
+        r = _f.read_file_info(p)
+        if r[0] != atom("ok"):
+            return False
+        return r[1][2] == atom("directory")
+
+    def abspath(self, p):
+        return _fn.absname(p)
+
+    def isabs(self, p):
+        return len(p) > 0 and p[0] == "/"
+
+path = _Path()

@@ -1,0 +1,23 @@
+# sys — system-specific parameters and functions (selective port).
+# Everything that maps onto OTP is wrapped; CPython interpreter
+# introspection (refcounts, frames, recursion limits, module registry)
+# is N/A by design. argv excludes the script path's own argv[0] slot
+# (SlopLang argv() is the argument list after the script name, per the
+# CLI contract).
+
+import erlang.erlang as _e
+import erlang.unicode as _u
+
+def platform():
+    return _u.characters_to_binary(_e.system_info(atom("system_architecture")))
+
+def otp_release():
+    return _u.characters_to_binary(_e.system_info(atom("otp_release")))
+
+def version_info():
+    return "sloplang 0.1.0 (BEAM/OTP " + otp_release() + ")"
+
+def maxsize():
+    # BEAM integers are unbounded bignums; there is no word-size ceiling.
+    # Returned for compatibility only.
+    return 9223372036854775807

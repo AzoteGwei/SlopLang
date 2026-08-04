@@ -1,0 +1,27 @@
+math: 3 4 6 720 4
+math: True 4.0 256.0
+random: 61 a [2, 4, 3, 1]
+hashlib: 8a7148dfee42902f881086ce7249dd2b
+hashlib: 95220649f7d73b138d2de43caac98e05bccbf4c5eb9b171205312e432623fba0
+statistics: 2.5 3 2
+functools: 6 110
+functools cache fib(35): 9227465
+itertools: [2, 5, 8, 11, 14]
+itertools: ['a', 'b', 'a', 'b', 'a', 'b']
+itertools: [1, 2, 3, 4]
+itertools: [3, 5, 7]
+itertools: [1, 3, 6, 10]
+itertools: [('a', 'b'), ('b', 'c')]
+collections: 4 0 [('s', 4), ('i', 4)] 11
+collections: [1, 2] False
+re: 66-42 66 42 (6, 8)
+re: slop_lang ['1', '2', '3'] a_b_c
+re: ['2024', '03', '01'] True
+json: {"lang": "slop", "nested": {"ok": "yes"}, "nums": [1, 2.5, true, null]}
+json: {'a': [1, 2, {'b': None}], 'c': 'x'}
+datetime: 2024-03-01T15:30:45 4 2024-03-01
+datetime: 2024-03-01T15:30:45 2024-03-01T15:30:45
+datetime: 172890.0
+os: /tmp/x ('a.tar', '.gz') b.txt
+os: True True fallback
+sys: sloplang 0.1.0 (BEAM/OTP 25) True

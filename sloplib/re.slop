@@ -1,0 +1,143 @@
+# re — regular expressions.
+# Python re-style API over OTP's :re (PCRE). Deviations: patterns are PCRE,
+# not CPython's engine — most syntax matches, but \b inside classes,
+# conditionals, and some lookaround corner cases can differ; flags are
+# passed as OTP option atoms through compile(); Match supports group/
+# groups/start/end/span but no groupdict/lastindex yet; sub() replaces
+# all occurrences (no count argument); the cache of compiled patterns is
+# left to OTP.
+
+import erlang.re as _re
+
+class Match:
+    def __init__(self, text, spans):
+        self._text = text
+        self._spans = spans
+
+    def _piece(self, i):
+        if i >= len(self._spans):
+            raise IndexError("no such group")
+        sp = self._spans[i]
+        if sp == -1:
+            return None
+        (start, ln) = sp
+        return self._text[start:start + ln]
+
+    def group(self, *idx):
+        if len(idx) == 0:
+            return self._piece(0)
+        if len(idx) == 1:
+            return self._piece(idx[0])
+        return tuple([self._piece(i) for i in idx])
+
+    def groups(self, default=None):
+        out = []
+        for i in range(1, len(self._spans)):
+            g = self._piece(i)
+            if g == None:
+                out = out + [default]
+            else:
+                out = out + [g]
+        return tuple(out)
+
+    def start(self, i=0):
+        return self._spans[i][0]
+
+    def end(self, i=0):
+        sp = self._spans[i]
+        return sp[0] + sp[1]
+
+    def span(self, i=0):
+        return (self.start(i), self.end(i))
+
+    def __repr__(self):
+        return "<re.Match " + repr(self.group()) + ">"
+
+class _Pattern:
+    def __init__(self, pattern, flags=None):
+        self.pattern = pattern
+        self._flags = flags
+        if flags == None:
+            self._cp = _re.compile(pattern)[1]
+        else:
+            self._cp = _re.compile(pattern, flags)[1]
+
+    def _run(self, s, opts):
+        r = _re.run(s, self._cp, [(atom("capture"), atom("all"), atom("index"))] + opts)
+        if r == atom("nomatch"):
+            return None
+        return Match(s, list(r[1]))
+
+    def search(self, s):
+        return self._run(s, [])
+
+    def match(self, s):
+        return self._run(s, [atom("anchored")])
+
+    def fullmatch(self, s):
+        m = self.match(s)
+        if m == None:
+            return None
+        if m.end() != len(s):
+            return None
+        return m
+
+    def findall(self, s):
+        out = []
+        off = 0
+        while off <= len(s):
+            r = _re.run(s, self._cp, [(atom("capture"), atom("all"), atom("index")),
+                                       (atom("offset"), off)])
+            if r == atom("nomatch"):
+                break
+            spans = list(r[1])
+            m = Match(s, spans)
+            if len(spans) == 1:
+                out = out + [m.group()]
+            elif len(spans) == 2:
+                out = out + [m.group(1)]
+            else:
+                out = out + [m.groups()]
+            e = m.end()
+            if e <= off:
+                off = off + 1
+            else:
+                off = e
+        return out
+
+    def sub(self, repl, s):
+        return _re.replace(s, self._cp, repl, [(atom("return"), atom("binary")), atom("global")])
+
+    def split(self, s):
+        return list(_re.split(s, self._cp, [(atom("return"), atom("binary"))]))
+
+def compile(pattern, flags=None):
+    return _Pattern(pattern, flags)
+
+def search(pattern, s, flags=None):
+    return compile(pattern, flags).search(s)
+
+def match(pattern, s, flags=None):
+    return compile(pattern, flags).match(s)
+
+def fullmatch(pattern, s, flags=None):
+    return compile(pattern, flags).fullmatch(s)
+
+def findall(pattern, s, flags=None):
+    return compile(pattern, flags).findall(s)
+
+def sub(pattern, repl, s, flags=None):
+    return compile(pattern, flags).sub(repl, s)
+
+def split(pattern, s, flags=None):
+    return compile(pattern, flags).split(s)
+
+def escape(s):
+    special = "\\^$.[]{}()*+?|"
+    out = ""
+    for c in s:
+        if c in special:
+            out = out + "\\" + c
+        else:
+            out = out + c
+    return out

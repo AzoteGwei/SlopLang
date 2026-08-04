@@ -1,0 +1,146 @@
+# datetime — date and time handling.
+# Python datetime-style values over OTP's calendar/system_time. Deviations:
+# timezone handling is limited to naive values plus utcnow()/now() (both
+# naive; the PEP 495 fold attribute is documented as N/A because naive
+# SlopLang datetimes carry no tzinfo to fold); strptime is restricted to
+# ISO 8601 via fromisoformat(); no calendar/timezone databases.
+
+import erlang.calendar as _cal
+import erlang.erlang as _e
+
+class timedelta:
+    def __init__(self, days=0, seconds=0, microseconds=0):
+        self._us = ((days * 86400 + seconds) * 1000000) + microseconds
+
+    def total_seconds(self):
+        return self._us / 1000000.0
+
+    def days(self):
+        return self._us // (86400 * 1000000)
+
+    def seconds(self):
+        return (self._us // 1000000) % 86400
+
+    def __repr__(self):
+        return "timedelta(seconds=" + str(self._us // 1000000) + ")"
+
+def _pad(n, w):
+    s = str(n)
+    while len(s) < w:
+        s = "0" + s
+    return s
+
+class date:
+    def __init__(self, year, month, day):
+        if not _cal.valid_date(year, month, day):
+            raise ValueError("invalid date")
+        self.year = year
+        self.month = month
+        self.day = day
+
+    def isoformat(self):
+        return _pad(self.year, 4) + "-" + _pad(self.month, 2) + "-" + _pad(self.day, 2)
+
+    def weekday(self):
+        return _cal.day_of_the_week(self.year, self.month, self.day) - 1
+
+    def __repr__(self):
+        return "date(" + self.isoformat() + ")"
+
+    def _days(self):
+        return _cal.date_to_gregorian_days(self.year, self.month, self.day)
+
+class time:
+    def __init__(self, hour=0, minute=0, second=0):
+        if hour < 0 or hour > 23 or minute < 0 or minute > 59 or second < 0 or second > 59:
+            raise ValueError("invalid time")
+        self.hour = hour
+        self.minute = minute
+        self.second = second
+
+    def isoformat(self):
+        return _pad(self.hour, 2) + ":" + _pad(self.minute, 2) + ":" + _pad(self.second, 2)
+
+    def __repr__(self):
+        return "time(" + self.isoformat() + ")"
+
+class datetime:
+    def __init__(self, year, month, day, hour=0, minute=0, second=0):
+        if not _cal.valid_date(year, month, day):
+            raise ValueError("invalid date")
+        if hour < 0 or hour > 23 or minute < 0 or minute > 59 or second < 0 or second > 59:
+            raise ValueError("invalid time")
+        self.year = year
+        self.month = month
+        self.day = day
+        self.hour = hour
+        self.minute = minute
+        self.second = second
+
+    def isoformat(self, sep="T"):
+        return (_pad(self.year, 4) + "-" + _pad(self.month, 2) + "-" + _pad(self.day, 2)
+                + sep + _pad(self.hour, 2) + ":" + _pad(self.minute, 2) + ":" + _pad(self.second, 2))
+
+    def date(self):
+        return date(self.year, self.month, self.day)
+
+    def time(self):
+        return time(self.hour, self.minute, self.second)
+
+    def weekday(self):
+        return _cal.day_of_the_week(self.year, self.month, self.day) - 1
+
+    def timestamp(self):
+        days = _cal.date_to_gregorian_days(self.year, self.month, self.day) - 719528
+        return days * 86400 + self.hour * 3600 + self.minute * 60 + self.second
+
+    def __repr__(self):
+        return "datetime(" + self.isoformat() + ")"
+
+def _from_ymd_hms(ymd, hms):
+    (y, mo, d) = ymd
+    (h, mi, s) = hms
+    return datetime(y, mo, d, h, mi, s)
+
+def now():
+    return _from_ymd_hms(_e.date(), _e.time())
+
+def utcnow():
+    return _from_ymd_hms(_cal.universal_time()[0], _cal.universal_time()[1])
+
+def today():
+    (y, mo, d) = _e.date()
+    return date(y, mo, d)
+
+def fromtimestamp(ts):
+    (ymd, hms) = _cal.system_time_to_universal_time(ts, atom("second"))
+    return _from_ymd_hms(ymd, hms)
+
+def _parse_date(txt):
+    parts = txt.split("-")
+    if len(parts) != 3:
+        raise ValueError("Invalid isoformat string: " + repr(txt))
+    return (int(parts[0]), int(parts[1]), int(parts[2]))
+
+def _parse_time(txt):
+    txt = txt.split(".")[0]
+    parts = txt.split(":")
+    if len(parts) != 3:
+        raise ValueError("Invalid isoformat string: " + repr(txt))
+    return (int(parts[0]), int(parts[1]), int(parts[2]))
+
+def date_fromisoformat(txt):
+    (y, mo, d) = _parse_date(txt)
+    return date(y, mo, d)
+
+def datetime_fromisoformat(txt):
+    if "T" in txt:
+        ds, ts = txt.split("T", 1)
+    elif " " in txt:
+        ds, ts = txt.split(" ", 1)
+    else:
+        (y, mo, d) = _parse_date(txt)
+        return datetime(y, mo, d)
+    (y, mo, d) = _parse_date(ds)
+    (h, mi, s) = _parse_time(ts)
+    return datetime(y, mo, d, h, mi, s)

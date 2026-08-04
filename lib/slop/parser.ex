@@ -159,9 +159,17 @@ defmodule Slop.Parser do
 
   defp stmt(st) do
     case peek(st) do
-      {:kw, _, kw} when kw in ~w(if while for def class try with match import from
+      {:kw, _, kw} when kw in ~w(if while for def class try with import from
                                    global raise return break continue pass del assert) ->
         compound_or_simple(st)
+
+      {:kw, _, "match"} ->
+        # `match` is a soft keyword: `match = ...` (and `match.x = ...`,
+        # `match(...)`) is an ordinary statement, `match subj:` a match
+        case peek2(st) do
+          {:op, _, op} when op in ["=", ".", "("] -> simple_stmt_line(st)
+          _ -> compound_or_simple(st)
+        end
 
       {:op, _, "@"} ->
         decorated(st)
@@ -771,11 +779,19 @@ defmodule Slop.Parser do
   defp put_decorators({:class, line, name, bases, body, decos}, d2),
     do: {:class, line, name, bases, body, d2 ++ decos}
 
+  # soft keywords are valid def names (re.match, etc.)
+  defp take_def_name(st) do
+    case peek(st) do
+      {:kw, line, "match"} -> {:ok, {:name, line, "match"}, advance(st)}
+      _ -> take(st, :name)
+    end
+  end
+
   defp def_stmt(st, decos) do
     {:kw, line, _} = peek(st)
     st = advance(st)
 
-    with {:ok, {:name, _, name}, st} <- take(st, :name),
+    with {:ok, {:name, _, name}, st} <- take_def_name(st),
          {:ok, _, st} <- take_op(st, "("),
          {:ok, params, st} <- params(st),
          {:ok, _, st} <- take_op(st, ")") do
@@ -1591,10 +1607,19 @@ defmodule Slop.Parser do
         st = advance(st)
 
         case take(st, :name) do
-          {:ok, {:name, line, n}, st} -> postfix_rest(st, {:attr, line, e, n})
+          {:ok, {:name, line, n}, st} ->
+            postfix_rest(st, {:attr, line, e, n})
+
           _ ->
-            {_, line, _} = peek(st)
-            err(line, "expected attribute name after '.'")
+            # keywords are fine as attribute names (re.match, obj.class...)
+            case peek(st) do
+              {:kw, line, n} ->
+                postfix_rest(advance(st), {:attr, line, e, n})
+
+              _ ->
+                {_, line, _} = peek(st)
+                err(line, "expected attribute name after '.'")
+            end
         end
 
       _ ->
@@ -1747,6 +1772,9 @@ defmodule Slop.Parser do
       {:kw, line, "None"} -> {:ok, {:lit, line, nil}, advance(st)}
       {:kw, line, "True"} -> {:ok, {:lit, line, true}, advance(st)}
       {:kw, line, "False"} -> {:ok, {:lit, line, false}, advance(st)}
+
+      # soft keyword: usable as a plain name in expression position
+      {:kw, line, "match"} -> {:ok, {:name, line, "match"}, advance(st)}
 
       {:kw, _, "not"} -> not_expr(st)
 

@@ -1,0 +1,85 @@
+# statistics — mathematical statistics functions.
+# PEP 450-style API, pure SlopLang. Deviations: no statistics module
+# classes (NormalDist etc.); multimode returns all modes; stdev/variance
+# use the sample (n-1) denominators like Python; Fraction/Decimal inputs
+# are not supported (ints and floats only).
+
+def mean(data):
+    xs = list(data)
+    if len(xs) == 0:
+        raise ValueError("mean requires at least one data point")
+    return sum(xs) / len(xs)
+
+def fmean(data):
+    return float(mean(data))
+
+def median(data):
+    xs = sorted(data)
+    n = len(xs)
+    if n == 0:
+        raise ValueError("median requires at least one data point")
+    mid = n // 2
+    if n % 2 == 1:
+        return xs[mid]
+    return (xs[mid - 1] + xs[mid]) / 2
+
+def median_low(data):
+    xs = sorted(data)
+    n = len(xs)
+    if n == 0:
+        raise ValueError("median_low requires at least one data point")
+    return xs[(n - 1) // 2]
+
+def median_high(data):
+    xs = sorted(data)
+    n = len(xs)
+    if n == 0:
+        raise ValueError("median_high requires at least one data point")
+    return xs[n // 2]
+
+def mode(data):
+    ms = multimode(data)
+    if len(ms) == 0:
+        raise ValueError("mode requires at least one data point")
+    return ms[0]
+
+def multimode(data):
+    counts = {}
+    order = []
+    for x in data:
+        if x in counts:
+            counts[x] = counts[x] + 1
+        else:
+            counts[x] = 1
+            order = order + [x]
+    if len(order) == 0:
+        return []
+    best = 0
+    for x in order:
+        if counts[x] > best:
+            best = counts[x]
+    return [x for x in order if counts[x] == best]
+
+def pvariance(data, mu=None):
+    xs = list(data)
+    n = len(xs)
+    if n == 0:
+        raise ValueError("pvariance requires at least one data point")
+    if mu == None:
+        mu = sum(xs) / n
+    return sum([(x - mu) * (x - mu) for x in xs]) / n
+
+def variance(data, xbar=None):
+    xs = list(data)
+    n = len(xs)
+    if n < 2:
+        raise ValueError("variance requires at least two data points")
+    if xbar == None:
+        xbar = sum(xs) / n
+    return sum([(x - xbar) * (x - xbar) for x in xs]) / (n - 1)
+
+def pstdev(data, mu=None):
+    return pvariance(data, mu) ** 0.5
+
+def stdev(data, xbar=None):
+    return variance(data, xbar) ** 0.5

@@ -1,0 +1,165 @@
+# json — JSON encoder and decoder.
+# Follows Python's json.dumps/loads with SlopLang defaults (compact
+# separators like the stdlib's default with spaces: ", " / ": ").
+# Absorbs what sloplib/web.slop implemented for responses. Deviations:
+# dumps supports str/int/float/bool/None/list/tuple/dict (other objects
+# fall back to str()); dict keys are stringified; loads accepts any JSON
+# text and raises ValueError on malformed input; no object_hook/parse_x
+# hooks; NaN/Infinity are not representable (BEAM floats trap).
+
+def dumps(v):
+    if v == None:
+        return "null"
+    if v == True:
+        return "true"
+    if v == False:
+        return "false"
+    t = type(v).__name__
+    if t == "int" or t == "float":
+        return str(v)
+    if t == "str":
+        return _quote(v)
+    if t == "list" or t == "tuple":
+        return "[" + ", ".join([dumps(x) for x in v]) + "]"
+    if t == "dict":
+        return "{" + ", ".join([_quote(str(k)) + ": " + dumps(v[k]) for k in v]) + "}"
+    return _quote(str(v))
+
+def _quote(s):
+    out = '"'
+    for c in s:
+        if c == '"' or c == "\\":
+            out += "\\" + c
+        elif c == "\n":
+            out += "\\n"
+        elif c == "\t":
+            out += "\\t"
+        elif c == "\r":
+            out += "\\r"
+        else:
+            out += c
+    return out + '"'
+
+def loads(s):
+    (v, i) = _value(s, _ws(s, 0))
+    end = _ws(s, i)
+    if end != len(s):
+        raise ValueError("Extra data: line 1 column " + str(end + 1) + " (char " + str(end) + ")")
+    return v
+
+def _ws(s, i):
+    while i < len(s) and s[i] in " \t\n\r":
+        i += 1
+    return i
+
+def _value(s, i):
+    if i >= len(s):
+        raise ValueError("Expecting value")
+    c = s[i]
+    if c == "{":
+        return _object(s, i + 1)
+    if c == "[":
+        return _array(s, i + 1)
+    if c == '"':
+        return _string(s, i + 1)
+    if s[i:i + 4] == "true":
+        return (True, i + 4)
+    if s[i:i + 5] == "false":
+        return (False, i + 5)
+    if s[i:i + 4] == "null":
+        return (None, i + 4)
+    return _number(s, i)
+
+def _object(s, i):
+    out = {}
+    i = _ws(s, i)
+    if i < len(s) and s[i] == "}":
+        return (out, i + 1)
+    while True:
+        i = _ws(s, i)
+        if i >= len(s) or s[i] != '"':
+            raise ValueError("Expecting property name enclosed in double quotes")
+        (k, i) = _string(s, i + 1)
+        i = _ws(s, i)
+        if i >= len(s) or s[i] != ":":
+            raise ValueError("Expecting ':' delimiter")
+        (v, i) = _value(s, _ws(s, i + 1))
+        out[k] = v
+        i = _ws(s, i)
+        if i < len(s) and s[i] == ",":
+            i += 1
+        elif i < len(s) and s[i] == "}":
+            return (out, i + 1)
+        else:
+            raise ValueError("Expecting ',' delimiter")
+
+def _array(s, i):
+    out = []
+    i = _ws(s, i)
+    if i < len(s) and s[i] == "]":
+        return (out, i + 1)
+    while True:
+        (v, i) = _value(s, _ws(s, i))
+        out = out + [v]
+        i = _ws(s, i)
+        if i < len(s) and s[i] == ",":
+            i += 1
+        elif i < len(s) and s[i] == "]":
+            return (out, i + 1)
+        else:
+            raise ValueError("Expecting ',' delimiter")
+
+def _string(s, i):
+    out = ""
+    while True:
+        if i >= len(s):
+            raise ValueError("Unterminated string")
+        c = s[i]
+        if c == '"':
+            return (out, i + 1)
+        if c == "\\":
+            e = s[i + 1]
+            if e == "n":
+                out += "\n"
+                i += 2
+            elif e == "t":
+                out += "\t"
+                i += 2
+            elif e == "r":
+                out += "\r"
+                i += 2
+            elif e == "u":
+                out += chr(int("0x" + s[i + 2:i + 6]))
+                i += 6
+            else:
+                out += e
+                i += 2
+        else:
+            out += c
+            i += 1
+
+def _number(s, i):
+    j = i
+    if j < len(s) and s[j] == "-":
+        j += 1
+    while j < len(s) and s[j] in "0123456789":
+        j += 1
+    is_float = False
+    if j < len(s) and s[j] == ".":
+        is_float = True
+        j += 1
+        while j < len(s) and s[j] in "0123456789":
+            j += 1
+    if j < len(s) and s[j] in "eE":
+        is_float = True
+        j += 1
+        if j < len(s) and s[j] in "+-":
+            j += 1
+        while j < len(s) and s[j] in "0123456789":
+            j += 1
+    if j == i:
+        raise ValueError("Expecting value")
+    txt = s[i:j]
+    if is_float:
+        return (float(txt), j)
+    return (int(txt), j)

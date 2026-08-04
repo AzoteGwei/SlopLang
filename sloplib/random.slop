@@ -1,0 +1,57 @@
+# random — pseudo-random generation.
+# Python random-style API over OTP :rand. Deviations: the generator state
+# lives in the calling process (BEAM process state, not a module-global
+# Random instance); seed(n) maps to :rand.seed(:exsss, ...); getstate/
+# setstate are not provided. shuffle returns a NEW list (immutability).
+
+import erlang.rand as _r
+
+def seed(n=0):
+    _r.seed(atom("exsss"), (n, n, n))
+    return None
+
+def random():
+    return _r.uniform()
+
+def uniform(a, b):
+    return a + (b - a) * _r.uniform()
+
+def randint(a, b):
+    # inclusive on both ends, like Python
+    return a + _r.uniform(b - a + 1) - 1
+
+def randrange(start, stop=None, step=1):
+    if stop == None:
+        stop = start
+        start = 0
+    n = (stop - start + step - 1) // step
+    if n <= 0:
+        raise ValueError("empty range for randrange()")
+    return start + step * (_r.uniform(n) - 1)
+
+def choice(seq):
+    items = list(seq)
+    if len(items) == 0:
+        raise IndexError("cannot choose from an empty sequence")
+    return items[_r.uniform(len(items)) - 1]
+
+def shuffle(seq):
+    items = list(seq)
+    out = []
+    while len(items) > 0:
+        i = _r.uniform(len(items)) - 1
+        out = out + [items[i]]
+        items = items[:i] + items[i + 1:]
+    return out
+
+def sample(seq, k):
+    items = shuffle(seq)
+    if k > len(items):
+        raise ValueError("sample larger than population")
+    return items[:k]
+
+def choices(seq, k=1):
+    out = []
+    for _ in range(k):
+        out = out + [choice(seq)]
+    return out

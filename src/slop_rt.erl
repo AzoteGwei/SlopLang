@@ -931,8 +931,12 @@ setitem(Obj, Idx, Val) when is_map(Obj) ->
         #{'$class' := C} ->
             case method_lookup(C, '__setitem__') of
                 {ok, M} ->
-                    _ = invoke({'$bound', M, Obj}, [Idx, Val], #{}),
-                    Obj;
+                    %% __setitem__ implicitly returns the updated self;
+                    %% propagate it so the rebind chain keeps the change
+                    case invoke({'$bound', M, Obj}, [Idx, Val], #{}) of
+                        #{'$class' := _} = NewObj -> NewObj;
+                        _ -> Obj
+                    end;
                 error ->
                     raise_exc('TypeError', <<"'", (exc_class_name(C))/binary,
                               "' object does not support item assignment">>)

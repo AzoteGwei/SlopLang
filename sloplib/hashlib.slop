@@ -1,0 +1,66 @@
+# hashlib — secure hashes and message digests.
+# PEP 247-style API over OTP :crypto (documented wrapper): new(name)
+# returns an object with update()/digest()/hexdigest(); convenience
+# constructors md5()/sha1()/sha256()/... take optional initial data.
+# Deviations: algorithms limited to what :crypto supports; digest() on
+# binary data uses raw bytes (str inputs are UTF-8); no shake_*/blake2*
+# keyed variants; calling update() after digest() keeps accumulating
+# (digests are computed over all data seen so far).
+
+import erlang.crypto as _c
+import erlang.erlang as _e
+
+class _Hash:
+    def __init__(self, algo):
+        self._algo = algo
+        self._data = ""
+
+    def update(self, data):
+        # no explicit return: mutating methods must let the implicit self
+        # value flow back so callers' rebind picks up the new state
+        self._data = self._data + str(data)
+
+    def digest(self):
+        return _c.hash(atom(self._algo), self._data)
+
+    def hexdigest(self):
+        return _hexify(self.digest())
+
+    def name(self):
+        return self._algo
+
+def _hexify(b):
+    out = ""
+    for byte in _e.binary_to_list(b):
+        h = hex(byte)[2:].lower()
+        if len(h) < 2:
+            h = "0" + h
+        out = out + h
+    return out
+
+def new(name):
+    return _Hash(name)
+
+def _with(algo, data):
+    h = new(algo)
+    if data != None:
+        h.update(data)
+    return h
+
+def md5(data=None):
+    return _with("md5", data)
+
+def sha1(data=None):
+    return _with("sha1", data)
+
+def sha224(data=None):
+    return _with("sha224", data)
+
+def sha256(data=None):
+    return _with("sha256", data)
+
+def sha384(data=None):
+    return _with("sha384", data)
+
+def sha512(data=None):
+    return _with("sha512", data)

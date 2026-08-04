@@ -1,0 +1,79 @@
+import math
+import random
+import hashlib
+import statistics
+import functools
+import itertools
+import stream
+import collections
+import re
+import json
+import datetime
+import os
+import sys
+
+# math
+print("math:", math.floor(3.7), math.ceil(3.2), math.gcd(12, 18), math.factorial(6), math.isqrt(17))
+print("math:", math.isclose(0.1 + 0.2, 0.3), math.sqrt(16.0), math.pow(2.0, 8.0))
+
+# random (seeded → deterministic)
+random.seed(7)
+print("random:", random.randint(1, 100), random.choice(["a", "b", "c"]), random.shuffle([1, 2, 3, 4]))
+
+# hashlib
+print("hashlib:", hashlib.md5("slop").hexdigest())
+print("hashlib:", hashlib.sha256("slop").hexdigest())
+
+# statistics
+print("statistics:", statistics.mean([1, 2, 3, 4]), statistics.median([5, 1, 3]), statistics.mode([2, 1, 2]))
+
+# functools
+from functools import partial, reduce
+def add3(a, b, c):
+    return a + b + c
+print("functools:", partial(add3, 1, 2)(3), reduce(lambda a, b: a + b, [1, 2, 3, 4], 100))
+
+@functools.cache
+def fib(n):
+    if n < 2:
+        return n
+    return fib(n - 1) + fib(n - 2)
+print("functools cache fib(35):", fib(35))
+
+# itertools (lazy streams)
+print("itertools:", stream.to_list(stream.take(5, itertools.count(2, 3))))
+print("itertools:", stream.to_list(stream.take(6, itertools.cycle("ab"))))
+print("itertools:", stream.to_list(itertools.chain([1, 2], [3, 4])))
+print("itertools:", stream.to_list(itertools.islice(itertools.count(0), 3, 9, 2)))
+print("itertools:", stream.to_list(itertools.accumulate([1, 2, 3, 4])))
+print("itertools:", stream.to_list(itertools.pairwise("abc")))
+
+# collections
+c = collections.Counter("mississippi")
+print("collections:", c["s"], c["z"], c.most_common(2), c.total())
+dd = collections.defaultdict(list)
+dd["k"].append(1)
+dd["k"].append(2)
+print("collections:", dd["k"], "x" in dd)
+
+# re
+m = re.search("(\\d+)-(\\d+)", "order 66-42 now")
+print("re:", m.group(), m.group(1), m.group(2), m.span(1))
+print("re:", re.match("\\w+", "slop_lang").group(), re.findall("\\d", "a1b2c3"), re.sub("\\s+", "_", "a b  c"))
+print("re:", re.split("-", "2024-03-01"), re.fullmatch("[a-z]+", "beam") != None)
+
+# json
+data = {"lang": "slop", "nums": [1, 2.5, True, None], "nested": {"ok": "yes"}}
+print("json:", json.dumps(data))
+print("json:", json.loads("{\"a\": [1, 2, {\"b\": null}], \"c\": \"x\"}"))
+
+# datetime
+dt = datetime.datetime(2024, 3, 1, 15, 30, 45)
+print("datetime:", dt.isoformat(), dt.weekday(), dt.date().isoformat())
+print("datetime:", datetime.datetime_fromisoformat("2024-03-01T15:30:45").isoformat(), datetime.fromtimestamp(dt.timestamp()).isoformat())
+print("datetime:", datetime.timedelta(days=2, seconds=90).total_seconds())
+
+# os / sys
+print("os:", os.path.join("/tmp", "x"), os.path.splitext("a.tar.gz"), os.path.basename("/a/b.txt"))
+print("os:", os.path.isabs(os.getcwd()), os.path.exists("slopc"), os.getenv("NO_SUCH_VAR_XYZ", "fallback"))
+print("sys:", sys.version_info(), len(sys.platform()) > 3)

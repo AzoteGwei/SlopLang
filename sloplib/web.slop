@@ -59,40 +59,12 @@ def urldecode(s):
             i += 1
     return out
 
-def json_dumps(v):
-    if v == None:
-        return "null"
-    if v == True:
-        return "true"
-    if v == False:
-        return "false"
-    t = type(v).__name__
-    if t == "int" or t == "float":
-        return str(v)
-    if t == "str":
-        return json_str(v)
-    if t == "list" or t == "tuple":
-        return "[" + ", ".join([json_dumps(x) for x in v]) + "]"
-    if t == "dict":
-        return "{" + ", ".join([json_str(str(k)) + ": " + json_dumps(v[k]) for k in v]) + "}"
-    return json_str(str(v))
+# JSON encoding is the stdlib's (sloplib/json.slop); json_dumps stays as
+# a local alias for backward compatibility.
+import json as _json
 
-def json_str(s):
-    out = '"'
-    for c in s:
-        if c == '"':
-            out += '\\"'
-        elif c == "\\":
-            out += "\\\\"
-        elif c == "\n":
-            out += "\\n"
-        elif c == "\r":
-            out += "\\r"
-        elif c == "\t":
-            out += "\\t"
-        else:
-            out += c
-    return out + '"'
+def json_dumps(v):
+    return _json.dumps(v)
 
 def json_resp(data, status=200):
     return Response(json_dumps(data), status, {"Content-Type": "application/json"})
