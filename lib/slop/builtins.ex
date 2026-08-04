@@ -19,6 +19,8 @@ defmodule Slop.Builtins do
     "task_group" => {:slop_rt, :task_group},
     "group_spawn" => {:slop_rt, :group_spawn},
     "group_join" => {:slop_rt, :group_join},
+    "seq_init" => {:slop_rt, :seq_init_wrap},
+    "seq_next" => {:slop_rt, :seq_next_wrap},
     "print" => {:slop_rt, :print},
     "len" => {:slop_rt, :len},
     "repr" => {:slop_rt, :repr},

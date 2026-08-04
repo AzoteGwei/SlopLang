@@ -29,6 +29,7 @@
          exc_matches/2, map_erlang_error/2, bind_params/4, unpack/2,
          defclass/4, instantiate/3, mro/1, is_slop_class/1,
          global_get/2, global_set/3, global_del/2, module_ensure_init/1, sorted_/2,
+         seq_init/1, seq_next/1, seq_init_wrap/2, seq_next_wrap/2,
          raise_any/1, normalize_exc/2, pattern_match/2, rethrow/3,
          get_builtin/1, builtins/0, builtin_classes/0,
          with_enter/1, with_exit/2, format_spec/2, super_proxy/2,
@@ -1382,7 +1383,43 @@ contains_iter(Container, Item) ->
 %% Iteration
 %%====================================================================
 
+%% lazy sequence protocol: seq_init/1 returns an opaque state (the list
+%% itself, or a stream step fun), seq_next/1 yields {H, State2} or '$end'.
+%% for-loops and comprehensions force sequences through this protocol, so
+%% infinite streams work uniformly with list sources.
+%% step funs are ordinary SlopLang functions (Pos/Kw protocol), invoked
+%% through invoke/3; the state tuple tags them so seq_next/1 can tell a
+%% stream state from a plain two-element list
+-spec seq_init(term()) -> term().
+seq_init({'$stream', F}) -> {'$stream_state', F};
+seq_init(L) when is_list(L) -> L;
+seq_init(Other) -> iter(Other).
+
+-spec seq_next(term()) -> {term(), term()} | '$end'.
+seq_next([]) -> '$end';
+seq_next([H | T]) -> {H, T};
+seq_next({'$stream_state', F}) ->
+    case invoke(F, [], #{}) of
+        '$stream_end' -> '$end';
+        {H, F2} -> {H, {'$stream_state', F2}};
+        _ -> raise_exc('TypeError',
+                       <<"stream step must return (value, next_step) or stream_end()">>)
+    end.
+
+seq_init_wrap([X], _) -> seq_init(X);
+seq_init_wrap(_, _) -> raise_exc('TypeError', <<"seq_init() expects one argument">>).
+
+seq_next_wrap([S], _) -> seq_next(S);
+seq_next_wrap(_, _) -> raise_exc('TypeError', <<"seq_next() expects one argument">>).
+
+stream_to_list(S) ->
+    case seq_next(seq_init(S)) of
+        '$end' -> [];
+        {H, S2} -> [H | stream_to_list(S2)]
+    end.
+
 -spec iter(term()) -> list().
+iter({'$stream', _} = S) -> stream_to_list(S);
 iter(L) when is_list(L) -> L;
 iter(B) when is_binary(B) ->
     [unicode:characters_to_binary([C]) || C <- unicode:characters_to_list(B)];

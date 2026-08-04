@@ -1,0 +1,86 @@
+# Lazy streams. A stream wraps a step function: calling it returns
+# either stream_end() or a (value, next_step) pair. for-loops and
+# comprehensions force streams through the same seq protocol as lists,
+# so infinite sequences mix freely with finite ones.
+
+def stream(step):
+    return (atom("$stream"), step)
+
+def stream_end():
+    return atom("$stream_end")
+
+def _end():
+    return atom("$end")
+
+def iterate(f, x):
+    return stream(_iterate_step(f, x))
+
+def _iterate_step(f, x):
+    def step():
+        return (x, _iterate_step(f, f(x)))
+    return step
+
+def naturals():
+    return iterate(lambda x: x + 1, 0)
+
+def fib():
+    return stream(_fib_step(0, 1))
+
+def _fib_step(a, b):
+    def step():
+        return (a, _fib_step(b, a + b))
+    return step
+
+def smap(f, s):
+    return stream(_smap_step(f, seq_init(s)))
+
+def _smap_step(f, st):
+    def step():
+        r = seq_next(st)
+        if r == _end():
+            return stream_end()
+        (h, st2) = r
+        return (f(h), _smap_step(f, st2))
+    return step
+
+def sfilter(f, s):
+    return stream(_sfilter_step(f, seq_init(s)))
+
+def _sfilter_step(f, st):
+    def step():
+        cur = st
+        while True:
+            r = seq_next(cur)
+            if r == _end():
+                return stream_end()
+            (h, st2) = r
+            cur = st2
+            if f(h):
+                return (h, _sfilter_step(f, st2))
+    return step
+
+def take(n, s):
+    return stream(_take_step(n, seq_init(s)))
+
+def _take_step(k, st):
+    def step():
+        if k <= 0:
+            return stream_end()
+        r = seq_next(st)
+        if r == _end():
+            return stream_end()
+        (h, st2) = r
+        return (h, _take_step(k - 1, st2))
+    return step
+
+def to_list(s):
+    rev = []
+    st = seq_init(s)
+    while True:
+        r = seq_next(st)
+        if r == _end():
+            break
+        (h, st2) = r
+        rev = [h] + rev
+        st = st2
+    return reversed(rev)

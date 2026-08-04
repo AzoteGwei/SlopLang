@@ -1,0 +1,21 @@
+import stream
+
+print("fib take 10:", stream.to_list(stream.take(10, stream.fib())))
+
+evens = stream.sfilter(lambda x: x % 2 == 0, stream.naturals())
+squares = stream.smap(lambda x: x * x, evens)
+print("even squares:", stream.to_list(stream.take(6, squares)))
+
+total = 0
+for x in stream.take(5, stream.naturals()):
+    total += x
+print("for over stream:", total)
+
+xs = [x * 2 for x in stream.take(4, stream.fib())]
+print("comp over stream:", xs)
+
+mixed = stream.to_list(stream.smap(lambda x: x + 1, [10, 20, 30]))
+print("stream from list:", mixed)
+
+back = stream.to_list(stream.take(3, stream.iterate(lambda x: x * 10, 1)))
+print("iterate:", back)

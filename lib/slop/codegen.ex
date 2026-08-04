@@ -813,10 +813,10 @@ defmodule Slop.Codegen do
       {loop_fname,
        fun(
          [l_var | param_vars],
-         case_(l_var, [
-           clause([nil_()], tuple([lit(:done), lit(false)] ++ param_vars)),
+         case_(call(:slop_rt, :seq_next, [l_var]), [
+           clause([lit(:"$end")], tuple([lit(:done), lit(false)] ++ param_vars)),
            clause(
-             [cons(h_var, t_var)],
+             [tuple([h_var, t_var])],
              let_(
                [try_res],
                apply_(
@@ -854,7 +854,7 @@ defmodule Slop.Codegen do
       letrec([loop_fun],
         let_(
           [res_var],
-          apply_(loop_fname, [call(:slop_rt, :iter, [iter_expr]) | init_vals]),
+          apply_(loop_fname, [call(:slop_rt, :seq_init, [iter_expr]) | init_vals]),
           aft.cont.(rest)
         )
       )
@@ -2501,13 +2501,13 @@ defmodule Slop.Codegen do
     loop_fun =
       {loop_fname,
        fun([l_var, acc2],
-         case_(l_var, [
-           clause([nil_()], acc2),
-           clause([cons(h_var, t_var)], inner_app)
+         case_(call(:slop_rt, :seq_next, [l_var]), [
+           clause([lit(:"$end")], acc2),
+           clause([tuple([h_var, t_var])], inner_app)
          ])
        )}
 
-    letrec([loop_fun], apply_(loop_fname, [call(:slop_rt, :iter, [iter_e]), acc_var]))
+    letrec([loop_fun], apply_(loop_fname, [call(:slop_rt, :seq_init, [iter_e]), acc_var]))
   end
 
   defp comp_build(ctx, [{:if, cond_e} | rest], acc_var, emit) do

@@ -1,0 +1,6 @@
+fib take 10: [0, 1, 1, 2, 3, 5, 8, 13, 21, 34]
+even squares: [0, 4, 16, 36, 64, 100]
+for over stream: 10
+comp over stream: [0, 2, 2, 4]
+stream from list: [11, 21, 31]
+iterate: [1, 10, 100]

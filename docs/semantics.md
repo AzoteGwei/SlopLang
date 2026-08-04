@@ -231,6 +231,30 @@ The parser rejects `async`, `await`, and `yield` with an error pointing
 here, so code using them fails loudly at compile time rather than
 silently misbehaving.
 
+## Streams (sloplib/stream.slop)
+
+Lazy, unbounded sequences without generators. A stream is a tagged
+tuple wrapping a step function; the step returns `stream_end()` or a
+`(value, next_step)` pair. The runtime iterates through a two-function
+protocol — `seq_init/1` (opaque state) and `seq_next/1` (`(value,
+state2)` or end) — used by `for` loops and comprehensions for *every*
+sequence, so lists and streams share one forcing path (lists are
+walked zero-copy; streams walk their step chain). Anything that
+materializes (`iter`, star-unpacking, `in`, `tuple()`, `sorted()`)
+forces finite streams to lists.
+
+Library functions: `stream(step)` / `stream_end()` (constructor and
+sentinel), `iterate(f, x)`, `naturals()`, `fib()`, `smap(f, s)`,
+`sfilter(f, s)`, `take(n, s)`, `to_list(s)`. All combinators accept
+streams or ordinary iterables.
+
+Because steps are plain SlopLang closures, a stream element costs one
+closure allocation that becomes garbage immediately: a three-stage
+pipeline over `take(1000000, naturals())` runs in constant memory
+(see `test/e2e/streams_test.exs`). Note: `(x for x in xs)` genexps
+remain eager (they build a list); reach for streams when laziness
+matters.
+
 ## Decorator expressions
 
 `@` accepts any expression: calls, attribute chains, factories —
