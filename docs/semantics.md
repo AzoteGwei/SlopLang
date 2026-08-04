@@ -121,3 +121,109 @@ SlopLang exceptions are thrown as `{'$slop_exc', Class, Instance}` terms
 and integrate with `try`/`except`/`finally`, `raise ... from ...`, and
 exception classes with inheritance. Uncaught exceptions print the class
 and `args`.
+
+## BEAM interop
+
+### Inbound: calling Erlang/Elixir from SlopLang
+
+`import erlang.MOD` and `import elixir.MOD` bind a foreign-module value
+(the as-name or last dotted segment):
+
+```python
+import erlang.lists
+import erlang.crypto
+import elixir.String
+
+lists.reverse([1, 2, 3])          # [3, 2, 1]
+crypto.strong_rand_bytes(16)      # binary
+String.upcase("hi")               # "HI"
+```
+
+Attribute access on a foreign module yields a foreign function; calling it
+performs a plain BEAM `apply`. Keyword arguments become a trailing Elixir
+keyword list. `atom("ok")` creates a BEAM atom.
+
+Value mapping (both directions):
+
+| SlopLang            | Erlang term                          |
+| ------------------- | ------------------------------------ |
+| `str`               | binary                               |
+| `int` / `float`     | integer / float                      |
+| `list` / `tuple`    | list / tuple                         |
+| `dict`              | map                                  |
+| `None`              | `nil`                                |
+| `bool`              | `true` / `false`                     |
+| `atom("...")`       | atom                                 |
+| pid / ref (W2)      | pid / reference                      |
+| functions           | `fun(Pos, Kw)` closures (see below)  |
+
+Erlang results that are pids, references, ports, or plain atoms pass
+through as opaque values and can be sent messages, compared, and printed.
+
+### Outbound: calling SlopLang from Erlang/Elixir
+
+A compiled `.beam` exports every top-level `def name(...)` as:
+
+- `name/2` — `name(ArgsList, KwMap)`; defaults are baked in and the
+  module's top-level statements are initialized on first call.
+- `name/3` — the raw protocol: `name(ArgsList, KwMap, DefaultsTuple)`.
+
+Class methods export as `'mod.Class.method'/3` (the first positional
+argument is `self`). Instances are created with
+`slop_rt:instantiate('mod.Class', Args, Kw)`.
+
+```erlang
+out:double([21], #{}).                      %% 42
+out:greet([<<"bob">>], #{punct => <<"?">>}).
+P = slop_rt:instantiate('out.Point', [3, 4], #{}),
+out:'out.Point.sum'([P], #{}, {}).          %% 7
+```
+
+SlopLang functions are `fun(PosArgs, KwMap)/2` values on the BEAM, so an
+Erlang side holding one calls it as `F([Arg1, Arg2], #{})`.
+
+## Concurrency
+
+SlopLang tasks are BEAM processes:
+
+- `spawn(f)` / `spawn(f, args_list)` — run `f(*args)` in a new monitored
+  process; returns a task handle.
+- `join(task)` — blocks until the task finishes; returns its result, or
+  re-raises the task's SlopLang exception in the joiner. A dead task
+  raises `RuntimeError`.
+- `send(pid_or_task, msg)` / `recv()` / `recv(timeout_ms)` — raw BEAM
+  message passing; any SlopLang value is a valid message. `recv` with a
+  timeout returns `None` on expiry.
+- `sleep(ms)`, `self_pid()`, `monotonic()` (milliseconds).
+
+Because tasks are ordinary processes, IO (print) interleaves and message
+passing works between any of them.
+
+## Decorator expressions
+
+`@` accepts any expression: calls, attribute chains, factories —
+`@deco(1, 2)`, `@app.get("/hello/<name>")`, `@registry.register("x")`.
+The expression is evaluated at definition time (top to bottom), the
+result is invoked with the defined function/class, and the name binds to
+the returned replacement. Registration-style decorators that mutate
+shared state should keep that state in ETS or a process (immutable values
+make instance-mutating registration invisible to later readers); see
+`sloplib/web.slop` and `examples/12_decorators.slop`.
+
+## The web framework (sloplib/web.slop)
+
+Bottle-flavored, implemented in SlopLang itself:
+
+- `@app.get("/path")`, `@app.post(...)`, `@app.put/delete/route(...)`;
+  `<name>` path parameters are passed positionally; query parameters are
+  passed as keyword arguments.
+- Handler return forms: `str` (200 text/html), `dict`/`list` (JSON),
+  `(body, status)` and `(body, status, headers)` tuples, `Response`.
+- `json_resp(data, status=200)`, `redirect(url, status=302)`,
+  `abort(status, body)`, `HTTPError`.
+- `current_request()` — the request being handled (method, path, query,
+  query_string, headers, body), stored in the connection process.
+- `app.run(host, port)` — blocking development server backed by
+  `slop_http` (gen_tcp + OTP HTTP packet parsing, one spawned process per
+  connection, so requests are served concurrently).
+- Deferred: templates, static files, middleware, keep-alive, HTTPS.

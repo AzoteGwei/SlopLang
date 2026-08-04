@@ -13,6 +13,35 @@ See [docs/semantics.md](docs/semantics.md) for the language semantics,
 including where SlopLang deviates from Python (immutability, the statement
 rebind rule, the pop protocol, by-value closures).
 
+## Features
+
+- Python 3-flavored syntax: classes with inheritance, exceptions,
+  match, decorators (arbitrary expressions: `@app.get("/x/<name>")`),
+  comprehensions, generators (eager), f-strings, unpacking.
+- BEAM interop, both directions: `import erlang.lists` / `import
+  elixir.String` from SlopLang; compiled `.beam` modules export
+  `name/2` entry points callable from Erlang and Elixir.
+- Concurrency: `spawn`/`join` task builtins plus `send`/`recv` message
+  passing, mapped to BEAM processes.
+- A Bottle-flavored web framework written in SlopLang
+  ([sloplib/web.slop](sloplib/web.slop)) with a concurrent development
+  server ([examples/webapp.slop](examples/webapp.slop)):
+
+```python
+from web import App, json_resp
+
+app = App()
+
+@app.get("/hello/<name>")
+def hello(name):
+    return json_resp({"hello": name})
+
+app.run(port=8080)
+```
+
+Imports resolve relative to the importing file, then `SLOP_PATH`
+(colon-separated), then the toolchain's `sloplib/`.
+
 ## Building
 
 Requires Erlang/OTP 24+ and Elixir 1.14+.
