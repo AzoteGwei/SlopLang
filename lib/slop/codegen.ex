@@ -1386,6 +1386,7 @@ defmodule Slop.Codegen do
     else
       Enum.reduce(suites, MapSet.new(), fn s, acc ->
         MapSet.union(acc, Scope.assigned(s))
+        |> MapSet.union(Scope.rebind_roots(s))
       end)
       |> MapSet.intersection(ctx.locals)
       |> MapSet.difference(ctx.globals_decl)
@@ -1481,7 +1482,10 @@ defmodule Slop.Codegen do
 
     res_v = fresh()
 
-    inner = try_(body_tagged, [res_v], res_v, [c_v, r_v, st_v], normalized)
+    # wrap the try body in an immediately-applied fun: an `if` (if_end)
+    # directly inside a rethrow-handling try body nested under wrap_ret's
+    # try trips OTP 24's beam_validator (ambiguous_catch_try_state)
+    inner = try_(apply_(fun([], body_tagged), []), [res_v], res_v, [c_v, r_v, st_v], normalized)
 
     tag_var = fresh()
     merge_vars = for _ <- merge, do: fresh()
@@ -1993,17 +1997,57 @@ defmodule Slop.Codegen do
     {tuple([lit(:"$set"), m]), ctx}
   end
 
+  # dict literals compile to maps:from_list over a tuple list (chained
+  # single-pair map updates break beam_kernel_to_ssa on OTP 24 at 3+ keys),
+  # with ** segments folded in via maps:merge, preserving evaluation order
   defp compile_expr(ctx, {:dict, _, pairs}) do
-    Enum.reduce(pairs, {map_lit([]), ctx}, fn
-      {:pair, k, v}, {me, c} ->
-        {ke, c} = compile_expr(c, k)
-        {ve, c} = compile_expr(c, v)
-        {:cerl.ann_c_map([], me, [:cerl.c_map_pair(ke, ve)]), c}
+    # group consecutive {:pair} runs; ** entries are their own segments
+    segments =
+      Enum.chunk_while(
+        pairs,
+        [],
+        fn
+          {:pair, _, _} = p, acc -> {:cont, [p | acc]}
+          {:kwstar, _, _} = k, acc -> {:cont, Enum.reverse(acc), [k]}
+        end,
+        fn
+          [] -> {:cont, []}
+          acc -> {:cont, Enum.reverse(acc), []}
+        end
+      )
 
-      {:kwstar, _, e}, {me, c} ->
-        {ee, c} = compile_expr(c, e)
-        {call(:maps, :merge, [me, ee]), c}
-    end)
+    {seg_exprs, ctx} =
+      Enum.map_reduce(segments, ctx, fn seg, c ->
+        case seg do
+          [] ->
+            {nil, c}
+
+          [{:kwstar, _, e}] ->
+            {ee, c} = compile_expr(c, e)
+            {ee, c}
+
+          pairs when is_list(pairs) ->
+            {kvs, c} =
+              Enum.map_reduce(pairs, c, fn {:pair, k, v}, cc ->
+                {ke, cc} = compile_expr(cc, k)
+                {ve, cc} = compile_expr(cc, v)
+                {tuple([ke, ve]), cc}
+              end)
+
+            {call(:maps, :from_list, [list_lit(kvs)]), c}
+        end
+      end)
+
+    me =
+      seg_exprs
+      |> Enum.reject(&is_nil/1)
+      |> case do
+        [] -> map_lit([])
+        [one] -> one
+        [first | rest] -> Enum.reduce(rest, first, fn seg, acc -> call(:maps, :merge, [acc, seg]) end)
+      end
+
+    {me, ctx}
   end
 
   defp compile_expr(ctx, {:binop, _, op, l, r}) do
@@ -2271,16 +2315,55 @@ defmodule Slop.Codegen do
     end
   end
 
+  # keyword args: consecutive name=value pairs compile to maps:from_list
+  # (chained single-pair map updates break beam_kernel_to_ssa on OTP 24 at
+  # 3+ pairs); ** dicts are key-converted by the runtime
   defp compile_kw_args(ctx, kwargs) do
-    Enum.reduce(kwargs, {map_lit([]), ctx}, fn
-      {:kw, n, e}, {me, c} ->
-        {ee, c} = compile_expr(c, e)
-        {:cerl.ann_c_map([], me, [:cerl.c_map_pair(lit(String.to_atom(n)), ee)]), c}
+    segments =
+      Enum.chunk_while(
+        kwargs,
+        [],
+        fn
+          {:kw, _, _} = p, acc -> {:cont, [p | acc]}
+          {:kwstar, _, _} = k, acc -> {:cont, Enum.reverse(acc), [k]}
+        end,
+        fn
+          [] -> {:cont, []}
+          acc -> {:cont, Enum.reverse(acc), []}
+        end
+      )
 
-      {:kwstar, _, e}, {me, c} ->
-        {ee, c} = compile_expr(c, e)
-        {call(:maps, :merge, [me, ee]), c}
-    end)
+    {seg_exprs, ctx} =
+      Enum.map_reduce(segments, ctx, fn seg, c ->
+        case seg do
+          [] ->
+            {nil, c}
+
+          [{:kwstar, _, e}] ->
+            {ee, c} = compile_expr(c, e)
+            {call(:slop_rt, :kw_from_dict, [ee]), c}
+
+          pairs when is_list(pairs) ->
+            {kvs, c} =
+              Enum.map_reduce(pairs, c, fn {:kw, n, e}, cc ->
+                {ee, cc} = compile_expr(cc, e)
+                {tuple([lit(String.to_atom(n)), ee]), cc}
+              end)
+
+            {call(:maps, :from_list, [list_lit(kvs)]), c}
+        end
+      end)
+
+    me =
+      seg_exprs
+      |> Enum.reject(&is_nil/1)
+      |> case do
+        [] -> map_lit([])
+        [one] -> one
+        [first | rest] -> Enum.reduce(rest, first, fn seg, acc -> call(:maps, :merge, [acc, seg]) end)
+      end
+
+    {me, ctx}
   end
 
   # ---------- lambdas ----------

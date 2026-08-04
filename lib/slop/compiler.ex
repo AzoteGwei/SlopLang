@@ -42,9 +42,12 @@ defmodule Slop.Compiler do
       end
 
     toolchain_lib =
-      case :escript.script_name() do
-        {:ok, script} -> [Path.join(Path.dirname(to_string(script)), "sloplib")]
+      try do
+        [Path.join(Path.dirname(to_string(:escript.script_name())), "sloplib")]
+      rescue
         _ -> []
+      catch
+        _, _ -> []
       end
 
     ([Path.dirname(path)] ++ env ++ toolchain_lib)

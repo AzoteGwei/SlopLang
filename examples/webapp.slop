@@ -47,7 +47,7 @@ def tup():
     return ("created!\n", 201, {"X-Custom": "slop"})
 
 args = argv()
-if len(args) > 1:
-    app.run(port=int(args[1]))
+if len(args) > 0:
+    app.run(port=int(args[0]))
 else:
     app.run(port=8080)

@@ -33,7 +33,7 @@ defmodule Slop.CLI do
       {:ok, mods, main} ->
         load_all(mods)
         mod_atom = main
-        :persistent_term.put({:slop_argv, :slop}, Enum.map(args, &to_string/1))
+        :slop_rt.set_argv(Enum.map(args, &to_string/1))
 
         try do
           apply(mod_atom, :"$__init__", [])

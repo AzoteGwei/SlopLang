@@ -35,7 +35,7 @@
          set_argv/1, exc_class_name/1, print_exc/2]).
 
 %% builtins (all take (PosArgs, KwArgs))
--export([atom/2, erl_mod/1,
+-export([atom/2, erl_mod/1, kw_from_dict/1,
          spawn_task/2, join/2, sleep/2, send_msg/2, recv_msg/2, self_pid/2, monotonic/2,
          print/2, len/2, str/2, repr/2, int/2, float/2, bool/2, list/2,
          tuple/2, dict/2, set/2, range/2, enumerate/2, zip/2, map/2,
@@ -438,7 +438,9 @@ instantiate(Class, Pos, Kw) ->
     case lists:member(Class, builtin_type_classes()) of
         true -> instantiate_builtin(Class, Pos, Kw);
         false ->
-            case is_builtin_exception(Class) orelse is_exception_class(Class) of
+            IsBuiltinExc = is_builtin_exception(Class),
+            HasInit = method_lookup(Class, '__init__') =/= error,
+            case IsBuiltinExc orelse (is_exception_class(Class) andalso not HasInit) of
                 true ->
                     #{'$class' => Class, args => Pos};
                 false ->
@@ -451,7 +453,12 @@ instantiate(Class, Pos, Kw) ->
                             case method_lookup(Class, '__init__') of
                                 {ok, Init} ->
                                     case invoke({'$bound', Init, Obj}, Pos, Kw) of
-                                        #{'$class' := _} = NewObj -> NewObj;
+                                        #{'$class' := _} = NewObj ->
+                                            %% exceptions keep .args (BaseException)
+                                            case is_exception_class(Class) of
+                                                true -> maps:put(args, maps:get(args, NewObj, Pos), NewObj);
+                                                false -> NewObj
+                                            end;
                                         _ -> Obj
                                     end;
                                 error ->
@@ -2010,6 +2017,19 @@ atom([A], _) when is_atom(A) -> A;
 atom(_, _) -> raise_exc('TypeError', <<"atom() expects a string">>).
 
 erl_mod(M) when is_atom(M) -> {'$erl_mod', M}.
+
+%% **dict in calls: keyword names are atoms; convert string keys
+kw_from_dict(M) when is_map(M) ->
+    maps:fold(fun(K, V, Acc) when is_binary(K) ->
+                      maps:put(binary_to_atom(K, utf8), V, Acc);
+                 (K, V, Acc) when is_atom(K) ->
+                      maps:put(K, V, Acc);
+                 (K, _V, _Acc) ->
+                      raise_exc('TypeError', <<"keywords must be strings, got ",
+                                               (to_str(type_of(K)))/binary>>)
+              end, #{}, M);
+kw_from_dict(X) ->
+    raise_exc('TypeError', <<"** argument must be a dict, got ", (to_str(type_of(X)))/binary>>).
 
 %% ---- concurrency builtins ----
 %% spawn(f) / spawn(f, args): run f(*args) in a new process; returns a task

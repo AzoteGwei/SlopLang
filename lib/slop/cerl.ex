@@ -24,8 +24,15 @@ defmodule Slop.Cerl do
 
   def list_lit(items), do: Enum.reduce(Enum.reverse(items), nil_(), &cons(&1, &2))
 
+  # BEAM map literals require keys in Erlang term order; out-of-order keys
+  # break beam_kernel_to_ssa on OTP 24
   def map_lit(pairs) do
-    C.ann_c_map([], lit(%{}), Enum.map(pairs, fn {k, v} -> C.c_map_pair(lit(k), v) end))
+    sorted = Enum.sort_by(pairs, fn {k, _} -> k end, &term_lte/2)
+    C.ann_c_map([], lit(%{}), Enum.map(sorted, fn {k, v} -> C.c_map_pair(lit(k), v) end))
+  end
+
+  defp term_lte(a, b) do
+    :erlang.term_to_binary(a) <= :erlang.term_to_binary(b)
   end
 
   def map_update(arg, pairs) do
