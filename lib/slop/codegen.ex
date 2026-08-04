@@ -493,15 +493,14 @@ defmodule Slop.Codegen do
       ctx.locals != nil and
         Enum.any?(targets, fn t -> match?({:tuple, _, _}, t) or match?({:list, _, _}, t) end)
 
-    rebind? =
-      ctx.locals != nil and
-        Enum.any?(targets, fn t -> match?({:attr, _, _, _}, t) or match?({:subscript, _, _, _}, t) end)
-
     cond do
       unpack? ->
         compile_unpack_stmt(ctx, targets, vexpr)
 
-      rebind? ->
+      # at function level every assign is wrap-style: the value is bound to
+      # a fresh var by an enclosing let so later reads reference a plain
+      # var (re-emitting the RHS let on each read would re-execute it)
+      ctx.locals != nil ->
         v = fresh()
 
         {cont, ctx} =
@@ -570,8 +569,15 @@ defmodule Slop.Codegen do
 
       _ ->
         {vexpr, ctx} = compile_expr(ctx, value)
-        {v, ctx} = ensure_var(ctx, vexpr)
-        compile_assign(ctx, target, v)
+
+        if ctx.locals != nil do
+          v = fresh()
+          {rc, ctx} = rebuild_cont(ctx, target, v)
+          {{:wrap, fn rest -> let_([v], vexpr, rc.(rest)) end}, ctx}
+        else
+          {v, ctx} = ensure_var(ctx, vexpr)
+          compile_assign(ctx, target, v)
+        end
     end
   end
 
@@ -581,7 +587,15 @@ defmodule Slop.Codegen do
     case target do
       {:name, _, n} ->
         {cur, ctx} = read_name(ctx, n)
-        assign_name(ctx, n, call(:slop_rt, :binop, [lit(op), cur, eexpr]))
+        newv = call(:slop_rt, :binop, [lit(op), cur, eexpr])
+
+        if ctx.locals == nil do
+          assign_name(ctx, n, newv)
+        else
+          u = fresh()
+          {{:wrap, fn rest -> let_([u], newv, rest) end},
+           %{ctx | env: Map.put(ctx.env, n, {:local, u, false})}}
+        end
 
       {:attr, _, _, _} ->
         {cur, ctx} = compile_expr(ctx, target)
@@ -1440,10 +1454,10 @@ defmodule Slop.Codegen do
     all_suites = [body, orelse | Enum.map(handlers, fn {_, _, b} -> b end)]
     merge = merge_names(ctx, all_suites)
 
-    {body_expr, body_ctx} = compile_stmts(ctx, body)
-
-    body_tagged =
-      seq(body_expr, tuple([lit(:body)] ++ Enum.map(merge, &branch_value(ctx, body_ctx, &1))))
+    {body_tagged, body_ctx} =
+      compile_stmts_tail(ctx, body, fn bc ->
+        tuple([lit(:body)] ++ Enum.map(merge, &branch_value(ctx, bc, &1)))
+      end)
 
     c_v = fresh()
     r_v = fresh()
@@ -1557,10 +1571,10 @@ defmodule Slop.Codegen do
         _ -> %{handler_ctx | env: Map.put(handler_ctx.env, name, {:local, np_v, false})}
       end
 
-    {hbody_expr, hctx} = compile_stmts(handler_ctx, hbody)
-
-    tagged =
-      seq(hbody_expr, tuple([lit(:handler)] ++ Enum.map(merge, &branch_value(ctx, hctx, &1))))
+    {tagged, hctx} =
+      compile_stmts_tail(handler_ctx, hbody, fn bc ->
+        tuple([lit(:handler)] ++ Enum.map(merge, &branch_value(ctx, bc, &1)))
+      end)
 
     {next_expr, ctxs} = compile_except_chain(ctx, rest, nc_v, np_v, c_v, st_v, r_v, merge, [hctx | acc])
 

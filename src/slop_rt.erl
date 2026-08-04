@@ -36,6 +36,7 @@
 
 %% builtins (all take (PosArgs, KwArgs))
 -export([atom/2, erl_mod/1,
+         spawn_task/2, join/2, sleep/2, send_msg/2, recv_msg/2, self_pid/2, monotonic/2,
          print/2, len/2, str/2, repr/2, int/2, float/2, bool/2, list/2,
          tuple/2, dict/2, set/2, range/2, enumerate/2, zip/2, map/2,
          filter/2, sorted/2, reversed/2, sum/2, min/2, max/2, abs/2,
@@ -896,7 +897,7 @@ is_record_tag(T) ->
     is_tuple(T) andalso tuple_size(T) > 0 andalso
         lists:member(element(1, T), ['$set', '$bound', '$tbound', '$static',
                                       '$classmeth', '$super', '$slice', '$slop_file',
-                                      '$erl_mod', '$erl_fun']).
+                                      '$erl_mod', '$erl_fun', '$task']).
 
 check_int_index(I) when is_integer(I) -> I;
 check_int_index(_) -> raise_exc('TypeError', <<"indices must be integers">>).
@@ -1481,6 +1482,8 @@ tagged_str({'$slice', Lo, Hi, Step}) ->
 tagged_str({'$slop_file', _}) -> <<"<file>">>;
 tagged_str({'$erl_mod', M}) ->
     <<"<erl_mod '", (atom_to_binary(M, utf8))/binary, "'>">>;
+tagged_str({'$task', P, _}) ->
+    iolist_to_binary(io_lib:format("<task ~w>", [P]));
 tagged_str({'$erl_fun', M, F}) ->
     <<"<erl_fun '", (atom_to_binary(M, utf8))/binary, ":",
       (atom_to_binary(F, utf8))/binary, "'>">>;
@@ -2007,6 +2010,68 @@ atom([A], _) when is_atom(A) -> A;
 atom(_, _) -> raise_exc('TypeError', <<"atom() expects a string">>).
 
 erl_mod(M) when is_atom(M) -> {'$erl_mod', M}.
+
+%% ---- concurrency builtins ----
+%% spawn(f) / spawn(f, args): run f(*args) in a new process; returns a task
+%% handle. join(task) waits for completion, returning the result or
+%% re-raising the task's exception. send/recv pass any SlopLang value as a
+%% BEAM message.
+
+spawn_task([F], _) -> spawn_task_1(F, []);
+spawn_task([F, Args], _) when is_list(Args) -> spawn_task_1(F, Args);
+spawn_task(_, _) -> raise_exc('TypeError', <<"spawn() expects a callable and optional arg list">>).
+
+spawn_task_1(F, Args) ->
+    Parent = self(),
+    {Pid, Ref} = spawn_monitor(fun() ->
+        Result =
+            try invoke(F, Args, #{}) of
+                R -> {ok, R}
+            catch
+                throw:{'$slop_exc', _, _} = E -> {error, E};
+                Cl:Rs -> {error, {Cl, Rs}}
+            end,
+        Parent ! {'$slop_done', self(), Result}
+    end),
+    {'$task', Pid, Ref}.
+
+join([{'$task', Pid, Ref}], _) ->
+    receive
+        {'$slop_done', Pid, {ok, R}} ->
+            demonitor(Ref, [flush]),
+            R;
+        {'$slop_done', Pid, {error, {'$slop_exc', C, I}}} ->
+            demonitor(Ref, [flush]),
+            throw({'$slop_exc', C, I});
+        {'$slop_done', Pid, {error, {Cl, Rs}}} ->
+            demonitor(Ref, [flush]),
+            raise_exc('RuntimeError', iolist_to_binary(
+                io_lib:format("task crashed: ~p:~p", [Cl, Rs])));
+        {'DOWN', Ref, process, Pid, Reason} ->
+            raise_exc('RuntimeError', iolist_to_binary(
+                io_lib:format("task died: ~p", [Reason])))
+    end;
+join(_, _) -> raise_exc('TypeError', <<"join() expects a task">>).
+
+sleep([Ms], _) when is_integer(Ms), Ms >= 0 -> timer:sleep(Ms), ?NIL;
+sleep(_, _) -> raise_exc('TypeError', <<"sleep() expects milliseconds">>).
+
+send_msg([{'$task', Pid, _}, Msg], _) -> Pid ! Msg, ?NIL;
+send_msg([Pid, Msg], _) when is_pid(Pid) -> Pid ! Msg, ?NIL;
+send_msg(_, _) -> raise_exc('TypeError', <<"send() expects a pid or task and a message">>).
+
+recv_msg([], _) ->
+    receive M -> M end;
+recv_msg([Timeout], _) when is_integer(Timeout), Timeout >= 0 ->
+    receive M -> M
+    after Timeout -> ?NIL
+    end;
+recv_msg(_, _) -> raise_exc('TypeError', <<"recv() expects an optional timeout">>).
+
+self_pid([], _) -> self().
+
+monotonic([], _) -> erlang:monotonic_time(millisecond).
+
 
 repr([X], _) -> to_repr(X);
 repr(_, _) -> raise_exc('TypeError', <<"repr() takes exactly one argument">>).

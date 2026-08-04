@@ -1,0 +1,48 @@
+def worker(n, ms):
+    sleep(ms)
+    print("task", n, "done after", ms, "ms")
+    return n * 10
+
+t0 = monotonic()
+r1 = worker(1, 300)
+r2 = worker(2, 300)
+r3 = worker(3, 300)
+t1 = monotonic()
+print("sequential:", r1, r2, r3, "in", t1 - t0, "ms")
+
+t0 = monotonic()
+tasks = [spawn(worker, [n, 300]) for n in [1, 2, 3]]
+results = [join(t) for t in tasks]
+t1 = monotonic()
+print("concurrent:", results, "in", t1 - t0, "ms")
+
+def boom():
+    raise ValueError("task failed")
+
+t = spawn(boom)
+try:
+    join(t)
+except ValueError as e:
+    print("join re-raised:", e)
+
+def echo_loop():
+    m = recv()
+    print("echo got:", m)
+    send(m[0], ("reply", m[1]))
+
+t = spawn(echo_loop)
+sleep(50)
+send(t, (self_pid(), 42))
+print("main got:", recv(1000))
+
+def counter(n):
+    total = 0
+    for i in range(n):
+        total += i
+    return total
+
+t0 = monotonic()
+ts = [spawn(counter, [100000]) for _ in range(8)]
+rs = [join(t) for t in ts]
+t1 = monotonic()
+print("8 cpu tasks sum:", rs[0], "in", t1 - t0, "ms")

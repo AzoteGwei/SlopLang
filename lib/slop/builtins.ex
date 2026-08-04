@@ -7,6 +7,13 @@ defmodule Slop.Builtins do
 
   @table %{
     "atom" => {:slop_rt, :atom},
+    "spawn" => {:slop_rt, :spawn_task},
+    "join" => {:slop_rt, :join},
+    "sleep" => {:slop_rt, :sleep},
+    "send" => {:slop_rt, :send_msg},
+    "recv" => {:slop_rt, :recv_msg},
+    "self_pid" => {:slop_rt, :self_pid},
+    "monotonic" => {:slop_rt, :monotonic},
     "print" => {:slop_rt, :print},
     "len" => {:slop_rt, :len},
     "repr" => {:slop_rt, :repr},
