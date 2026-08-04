@@ -42,6 +42,7 @@
          mod_lookup/2, set_main_file/1, main_file/0, compile_paths/1, recompile/1,
          note_server/0, wait_if_server/0, start_watcher/2,
          http_handler/0, http_dispatch/2, register_http_app/1,
+         dyn_eval/2, dyn_exec/2, eval_wrap/2, exec_wrap/2,
          spawn_task/2, join/2, sleep/2, send_msg/2, recv_msg/2, self_pid/2, monotonic/2,
          cancel/2, is_alive/2, task_group/2, group_spawn/2, group_join/2,
          print/2, len/2, str/2, repr/2, int/2, float/2, bool/2, list/2,
@@ -85,6 +86,7 @@ exc_bases('FileNotFoundError') -> ['OSError'];
 exc_bases('AssertionError') -> ['Exception'];
 exc_bases('ImportError') -> ['Exception'];
 exc_bases('EOFError') -> ['Exception'];
+exc_bases('SyntaxError') -> ['Exception'];
 exc_bases(_) -> unknown.
 
 builtin_exception_classes() ->
@@ -92,7 +94,7 @@ builtin_exception_classes() ->
      'LookupError', 'IndexError', 'KeyError', 'ValueError', 'TypeError',
      'RuntimeError', 'AttributeError', 'NameError', 'UnboundLocalError',
      'StopIteration', 'NotImplementedError', 'OSError', 'FileNotFoundError',
-     'AssertionError', 'ImportError', 'EOFError'].
+     'AssertionError', 'ImportError', 'EOFError', 'SyntaxError'].
 
 builtin_type_classes() ->
     ['int', 'float', 'str', 'bool', 'list', 'tuple', 'dict', 'set',
@@ -1937,6 +1939,144 @@ mod_forget(M) ->
     ets:match_delete(slop_mods, {{{M, '_'}}, '_'}),
     ets:delete(slop_mods, {M, '$__inited__'}),
     ok.
+
+%% ---- dynamic execution (eval / exec) ----
+%% eval/exec are codegen special forms whose default context is the
+%% caller's module. Dynamic sources are compiled into a churn module
+%% 'dyn_<ctx>' (so hot-reload purges never kill the caller's running
+%% frames) whose globals point at the context env via the codegen
+%% `globals_mod` option: the caller module itself for the default
+%% context, or a standalone ETS-only env named by the context string.
+%% Unknown names inside dynamic sources resolve at runtime against that
+%% env (the `dynamic` codegen flag), never against caller locals — there
+%% is no runtime frame to share. exec re-runs the module $__init__ so
+%% defs and assignments land in the shared env and persist across calls.
+
+dyn_eval(Source, Ctx) when is_binary(Source) ->
+    {Base, Env} = dyn_context(Ctx),
+    mark_env(Env),
+    Mod = dyn_mod_for(Env, Base),
+    Wrapped = <<"def ___eval___():\n    return (", Source/binary, "\n)">>,
+    case dyn_compile(Wrapped, Mod, Env) of
+        {ok, Mod} ->
+            try apply(Mod, '___eval___', [[], #{}])
+            after ets:delete(mod_table(), {Env, '___eval___'})
+            end;
+        {error, Msg} -> raise_exc('SyntaxError', <<"eval: ", Msg/binary>>)
+    end.
+
+dyn_exec(Source, Ctx) when is_binary(Source) ->
+    {Base, Env} = dyn_context(Ctx),
+    mark_env(Env),
+    Mod = dyn_mod_for(Env, Base),
+    case dyn_compile(Source, Mod, Env) of
+        {ok, Mod} ->
+            ets:delete(mod_table(), {Mod, '$__inited__'}),
+            _ = Mod:'$__init__'(),
+            ?NIL;
+        {error, Msg} ->
+            raise_exc('SyntaxError', <<"exec: ", Msg/binary>>)
+    end.
+
+%% dynamic code is compiled into a churn module 'dyn_<ctx>' so hot-reload
+%% purges never touch the caller's running frames, but its globals point
+%% at the context env: the caller module itself for the default (module)
+%% context, or a standalone ETS-only env for named contexts.
+dyn_context(Ctx) when is_atom(Ctx) ->
+    {ctx_atom(Ctx), Ctx};
+dyn_context(Ctx) when is_binary(Ctx) ->
+    {ctx_atom(Ctx), binary_to_atom(sanitize(Ctx), utf8)}.
+
+%% A dyn module's code must stay loaded as long as any value derived from
+%% it (e.g. a fun stored by exec) is reachable from the env — the BEAM
+%% two-version rule would otherwise purge it under our feet. If the env
+%% still references the base module, compile into a fresh suffixed module
+%% instead of reloading; the retained code keeps its module alive, just
+%% like exec'd functions persist in a Python session.
+dyn_mod_for(Env, Base) ->
+    case env_refs(Env, Base) of
+        true ->
+            binary_to_atom(<<(atom_to_binary(Base, utf8))/binary, "_",
+                             (integer_to_binary(erlang:unique_integer([positive])))/binary>>, utf8);
+        false ->
+            Base
+    end.
+
+env_refs(Env, M) ->
+    ets:foldl(fun({{E, _}, V}, false) when E =:= Env -> refs_mod(V, M, 0);
+                 (_, Acc) -> Acc
+              end, false, mod_table()).
+
+refs_mod(V, M, D) when D =< 4, is_function(V) ->
+    erlang:fun_info(V, module) =:= {module, M};
+refs_mod(V, M, D) when D =< 4, is_list(V) ->
+    lists:any(fun(E) -> refs_mod(E, M, D + 1) end, V);
+refs_mod(V, M, D) when D =< 4, is_tuple(V) ->
+    lists:any(fun(E) -> refs_mod(E, M, D + 1) end, tuple_to_list(V));
+refs_mod(V, M, D) when D =< 4, is_map(V) ->
+    lists:any(fun({K, X}) -> refs_mod(K, M, D + 1) orelse refs_mod(X, M, D + 1) end,
+              maps:to_list(V));
+refs_mod(_, _, _) -> false.
+
+ctx_atom(C) when is_atom(C) -> ctx_atom(atom_to_binary(C, utf8));
+ctx_atom(C) when is_binary(C) ->
+    binary_to_atom(<<"dyn_", (sanitize(C))/binary>>, utf8).
+
+sanitize(C) ->
+    re:replace(C, "[^a-zA-Z0-9_]", "_", [global, {return, binary}]).
+
+%% a standalone env module has no code; mark it inited so global_get's
+%% ensure-init does not try to call a missing '$__init__'/0
+mark_env(Env) ->
+    case mod_inited(Env) of
+        true -> ok;
+        false -> mod_mark_inited(Env)
+    end.
+
+dyn_compile(Source, Mod, Env) ->
+    TmpDir = dyn_tmp_dir(),
+    ok = filelib:ensure_dir(filename:join(TmpDir, "x")),
+    File = filename:join([TmpDir, <<(atom_to_binary(Mod, utf8))/binary, ".slop">>]),
+    ok = file:write_file(File, Source),
+    {ok, Cwd} = file:get_cwd(),
+    SP0 = [Cwd],
+    SP1 = case 'Elixir.Slop.Compiler':toolchain_lib() of
+              nil -> SP0;
+              Lib -> SP0 ++ [Lib]
+          end,
+    SP = case os:getenv("SLOP_PATH") of
+             false -> SP1;
+             EnvP -> SP1 ++ [list_to_binary(D) || D <- string:split(EnvP, ":", all)]
+         end,
+    Opts = [{search_path, SP}, {dynamic, true}, {globals_mod, Env}],
+    try 'Elixir.Slop.Compiler':compile_file(File, Opts) of
+        {ok, Mods, Main} ->
+            maps:fold(fun(_P, {M, B}, ok) -> reload_module(M, B) end, ok, Mods),
+            {ok, Main};
+        {error, Msg} ->
+            {error, to_bin(Msg)};
+        Other ->
+            {error, iolist_to_binary(io_lib:format("~p", [Other]))}
+    catch
+        Class:Err:St ->
+            {error, iolist_to_binary(io_lib:format("~p:~p ~p", [Class, Err, St]))}
+    end.
+
+dyn_tmp_dir() ->
+    case os:getenv("TMPDIR") of
+        false -> "/tmp/slop_dyn";
+        D -> filename:join(D, "slop_dyn")
+    end.
+
+eval_wrap([S], _) -> dyn_eval(S, '$eval');
+eval_wrap([S, C], _) when is_binary(C) -> dyn_eval(S, C);
+eval_wrap([S, C], _) when is_atom(C) -> dyn_eval(S, C);
+eval_wrap(_, _) -> raise_exc('TypeError', <<"eval() takes a source string and optional context">>).
+
+exec_wrap([S], _) -> dyn_exec(S, '$eval');
+exec_wrap([S, C], _) when is_binary(C) -> dyn_exec(S, C);
+exec_wrap([S, C], _) when is_atom(C) -> dyn_exec(S, C);
+exec_wrap(_, _) -> raise_exc('TypeError', <<"exec() takes a source string and optional context">>).
 
 to_bin(B) when is_binary(B) -> B;
 to_bin(L) when is_list(L) -> unicode:characters_to_binary(L);

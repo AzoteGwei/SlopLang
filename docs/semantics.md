@@ -340,6 +340,45 @@ framework itself (`sloplib/web.slop`, `slop_rt`, `slop_http`) requires a
 restart — the watcher only watches the application tree, and
 runtime-infrastructure code is deliberately kept out of the purge path.
 
+## Dynamic execution (eval / exec)
+
+`eval(source)` compiles and evaluates an expression string at runtime;
+`exec(source)` compiles and executes statements. Both take an optional
+second argument naming the execution context.
+
+**Contexts.** The default context is the *caller's module*: the dynamic
+source sees the module's globals (`g = 10; eval("g * 2")` → `20`), and
+names defined by `exec` land in that same module env, so later
+`eval`/`exec` calls — and later dynamic code — can use them
+(`exec("def h(x): return x * 2")` then `eval("h(21)")` → `42`). An
+explicit context name (a string, e.g. `eval("x", "repl")`) selects a
+standalone shared env with that name: contexts with equal names share
+state, distinct names are isolated.
+
+**Scope rule.** Dynamic code resolves names against the context
+module's globals only — never against caller *locals*. There is no
+runtime frame to inherit locals from (functions compile to BEAM code;
+locals are SSA values), so `eval("local")` inside a function where
+`local` is a local variable raises `NameError`. Pass values through
+explicitly (e.g. string formatting or a named context).
+
+**Errors.** A source string that fails to parse or compile raises
+`SyntaxError`; a well-formed string whose execution fails raises the
+runtime error itself (`eval("1 / 0")` → `ZeroDivisionError`). One bad
+call never corrupts the session — the context env is untouched by
+failed compiles, and subsequent calls keep working.
+
+**Implementation.** Dynamic sources compile into a churn module
+`dyn_<context>` whose *code identity* is separate from its *global
+namespace* (the context env, plain ETS rows). This keeps hot-reload
+purges from ever killing the caller's running frames. When the env
+still holds values derived from a previous dynamic module (e.g. a fun
+stored by `exec`), the next call compiles into a fresh suffixed module
+instead of reloading — retained funs keep their code alive, exactly
+like `exec`'d functions persist in a Python session. Transient calls
+reuse the base module name, so `eval` in a loop does not leak atoms;
+each *retained* closure necessarily retains its module.
+
 ## The web framework (sloplib/web.slop)
 
 Bottle-flavored, implemented in SlopLang itself:

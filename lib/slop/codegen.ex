@@ -23,7 +23,7 @@ defmodule Slop.Codegen do
     BaseException Exception ArithmeticError ZeroDivisionError LookupError
     IndexError KeyError ValueError TypeError RuntimeError AttributeError
     NameError UnboundLocalError StopIteration NotImplementedError OSError
-    FileNotFoundError AssertionError ImportError EOFError)a
+    FileNotFoundError AssertionError ImportError EOFError SyntaxError)a
 
   # nested lets from a list of {var, expr} bindings
   defp bind_lets([], body), do: body
@@ -56,7 +56,14 @@ defmodule Slop.Codegen do
       mod_bindings: mod_bindings,
       defs: [],
       opts: opts,
-      main?: Keyword.get(opts, :main?, false)
+      main?: Keyword.get(opts, :main?, false),
+      dynamic: Keyword.get(opts, :dynamic, false),
+      globals_mod:
+        case Keyword.get(opts, :globals_mod, nil) do
+          nil -> mod_atom
+          a when is_atom(a) -> a
+          s when is_binary(s) -> String.to_atom(s)
+        end
     }
 
     # pre-compile top-level function defs, plus a public `name/2` entry
@@ -624,7 +631,7 @@ defmodule Slop.Codegen do
   defp compile_del(ctx, {:name, _, n}) do
     cond do
       MapSet.member?(ctx.globals_decl, n) or ctx.locals == nil ->
-        {call(:slop_rt, :global_del, [lit(ctx.mod), lit(String.to_atom(n))]), ctx}
+        {call(:slop_rt, :global_del, [lit(ctx.globals_mod), lit(String.to_atom(n))]), ctx}
 
       true ->
         {lit(nil), %{ctx | env: Map.delete(ctx.env, n)}}
@@ -1132,7 +1139,7 @@ defmodule Slop.Codegen do
             assign_name(ctx, root, rb)
 
           :global ->
-            {call(:slop_rt, :global_set, [lit(ctx.mod), lit(String.to_atom(root)), rb]), ctx}
+            {call(:slop_rt, :global_set, [lit(ctx.globals_mod), lit(String.to_atom(root)), rb]), ctx}
 
           :none ->
             {call_expr, ctx}
@@ -1273,11 +1280,11 @@ defmodule Slop.Codegen do
   defp rebuild_cont(ctx, {:name, _, n}, value_expr) do
     cond do
       MapSet.member?(ctx.globals_decl, n) ->
-        {fn r -> seq(call(:slop_rt, :global_set, [lit(ctx.mod), lit(String.to_atom(n)), value_expr]), r) end,
+        {fn r -> seq(call(:slop_rt, :global_set, [lit(ctx.globals_mod), lit(String.to_atom(n)), value_expr]), r) end,
          ctx}
 
       ctx.locals == nil ->
-        {fn r -> seq(call(:slop_rt, :global_set, [lit(ctx.mod), lit(String.to_atom(n)), value_expr]), r) end,
+        {fn r -> seq(call(:slop_rt, :global_set, [lit(ctx.globals_mod), lit(String.to_atom(n)), value_expr]), r) end,
          %{ctx | mod_bindings: Map.put_new(ctx.mod_bindings, n, :value)}}
 
       true ->
@@ -1351,12 +1358,12 @@ defmodule Slop.Codegen do
       MapSet.member?(ctx.globals_decl, name) ->
         {v, ctx} = ensure_var(ctx, value_expr)
 
-        {call(:slop_rt, :global_set, [lit(ctx.mod), lit(String.to_atom(name)), v]), ctx}
+        {call(:slop_rt, :global_set, [lit(ctx.globals_mod), lit(String.to_atom(name)), v]), ctx}
 
       ctx.locals == nil ->
         {v, ctx} = ensure_var(ctx, value_expr)
 
-        {call(:slop_rt, :global_set, [lit(ctx.mod), lit(String.to_atom(name)), v]),
+        {call(:slop_rt, :global_set, [lit(ctx.globals_mod), lit(String.to_atom(name)), v]),
          %{ctx | mod_bindings: Map.put_new(ctx.mod_bindings, name, :value)}}
 
       true ->
@@ -2104,7 +2111,39 @@ defmodule Slop.Codegen do
     end
   end
 
-  defp compile_expr(ctx, {:call, _, f, args, kwargs}) do
+  # eval/exec are special forms: the caller's module is the default
+  # dynamic-execution context, so module globals are visible (locals are
+  # not — there is no runtime frame to share)
+  defp compile_expr(ctx, {:call, _line, {:name, _, n}, args, kwargs} = e)
+       when n in ["eval", "exec"] do
+    if ctx.env[n] != nil or MapSet.member?(ctx.globals_decl, n) or
+         Map.has_key?(ctx.mod_bindings, n) do
+      compile_call_expr(ctx, e)
+    else
+      fun = if n == "eval", do: :dyn_eval, else: :dyn_exec
+
+      {arg_exprs, ctx} = compile_exprs(ctx, args)
+
+      ctx =
+        if kwargs != [] do
+          raise CompileError, message: "#{n}() takes positional arguments only", line: _line
+        else
+          ctx
+        end
+
+      case arg_exprs do
+        [src] -> {call(:slop_rt, fun, [src, lit(ctx.mod)]), ctx}
+        [src, c] -> {call(:slop_rt, fun, [src, c]), ctx}
+        _ -> raise CompileError, message: "#{n}() takes 1 or 2 arguments", line: _line
+      end
+    end
+  end
+
+  defp compile_expr(ctx, {:call, _, _, _, _} = e) do
+    compile_call_expr(ctx, e)
+  end
+
+  defp compile_call_expr(ctx, {:call, _, f, args, kwargs}) do
     {pos_expr, ctx} = compile_pos_args(ctx, args)
     {kw_expr, ctx} = compile_kw_args(ctx, kwargs)
 
@@ -2624,7 +2663,7 @@ defmodule Slop.Codegen do
              ]), ctx}
 
           MapSet.member?(ctx.globals_decl, n) or Map.has_key?(ctx.mod_bindings, n) ->
-            {call(:slop_rt, :global_get, [lit(ctx.mod), lit(String.to_atom(n))]), ctx}
+            {call(:slop_rt, :global_get, [lit(ctx.globals_mod), lit(String.to_atom(n))]), ctx}
 
           n == "__name__" ->
             if ctx.main? do
@@ -2639,13 +2678,20 @@ defmodule Slop.Codegen do
                 {make_fun(m, f, 2), ctx}
 
               :error ->
-                if String.to_atom(n) in @builtin_classes do
-                  {lit(String.to_atom(n)), ctx}
-                else
-                  {call(:slop_rt, :raise_exc, [
-                     lit(:NameError),
-                     lit(<<"name '#{n}' is not defined">>)
-                   ]), ctx}
+                cond do
+                  String.to_atom(n) in @builtin_classes ->
+                    {lit(String.to_atom(n)), ctx}
+
+                  # eval/exec compilation units resolve unknown names at
+                  # runtime against the context module's globals
+                  ctx.dynamic ->
+                    {call(:slop_rt, :global_get, [lit(ctx.globals_mod), lit(String.to_atom(n))]), ctx}
+
+                  true ->
+                    {call(:slop_rt, :raise_exc, [
+                       lit(:NameError),
+                       lit(<<"name '#{n}' is not defined">>)
+                     ]), ctx}
                 end
             end
         end

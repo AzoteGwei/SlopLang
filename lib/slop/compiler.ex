@@ -17,8 +17,9 @@ defmodule Slop.Compiler do
   def compile_file(path, opts \\ []) do
     search_path = Keyword.get(opts, :search_path, default_search_path(path))
     entry = Path.expand(path)
+    entry_opts = Keyword.take(opts, [:dynamic, :globals_mod])
 
-    case compile_tree(entry, search_path, entry, %{}) do
+    case compile_tree(entry, search_path, entry, %{}, entry_opts) do
       {:ok, mods, main} -> {:ok, mods, main}
       {:error, _} = e -> e
     end
@@ -65,7 +66,7 @@ defmodule Slop.Compiler do
     |> Enum.uniq()
   end
 
-  defp compile_tree(path, search_path, entry, seen) do
+  defp compile_tree(path, search_path, entry, seen, entry_opts \\ []) do
     abs = Path.expand(path)
 
     if Map.has_key?(seen, abs) do
@@ -76,12 +77,14 @@ defmodule Slop.Compiler do
         modname = modname_for(abs)
         imports = collect_imports(ast)
 
-        case compile_imports(imports, abs, search_path, entry, Map.put(seen, abs, :pending)) do
+        case compile_imports(imports, abs, search_path, entry, Map.put(seen, abs, :pending), entry_opts) do
           {:error, _} = e ->
             e
 
           {:ok, seen, mod_map} ->
-            with {:ok, forms, _} <- codegen(ast, modname, main?: abs == entry, mod_map: mod_map),
+            extra = if abs == entry, do: entry_opts, else: []
+
+            with {:ok, forms, _} <- codegen(ast, modname, [main?: abs == entry, mod_map: mod_map] ++ extra),
                  {:ok, mod_atom, bin} <- compile_forms(forms) do
               {:ok, Map.put(seen, abs, {mod_atom, bin}), mod_atom}
             end
@@ -93,11 +96,11 @@ defmodule Slop.Compiler do
   defp foreign?(path),
     do: String.starts_with?(path, "erlang.") or String.starts_with?(path, "elixir.")
 
-  defp compile_imports(imports, from_file, search_path, entry, seen) do
+  defp compile_imports(imports, from_file, search_path, entry, seen, entry_opts \\ []) do
     Enum.reduce_while(imports, {:ok, seen, %{}}, fn name, {:ok, acc, mod_map} ->
       case find_module_file(name, Path.dirname(from_file), search_path) do
         {:ok, file} ->
-          case compile_tree(file, search_path, entry, acc) do
+          case compile_tree(file, search_path, entry, acc, entry_opts) do
             {:ok, acc2, _} ->
               {:cont, {:ok, acc2, Map.put(mod_map, name, modname_for(Path.expand(file)))}}
 
