@@ -21,8 +21,14 @@ rebind rule, the pop protocol, by-value closures).
 - BEAM interop, both directions: `import erlang.lists` / `import
   elixir.String` from SlopLang; compiled `.beam` modules export
   `name/2` entry points callable from Erlang and Elixir.
-- Concurrency: `spawn`/`join` task builtins plus `send`/`recv` message
-  passing, mapped to BEAM processes.
+- Concurrency: `spawn`/`join` (with timeout) task builtins, `cancel`
+  tree-kill, `task_group` with fail-fast and collect modes, plus
+  `send`/`recv` message passing — mapped to BEAM processes; 10 000
+  tasks spawn and join in well under a second.
+- Lazy streams ([sloplib/stream.slop](sloplib/stream.slop)):
+  `naturals`/`iterate`/`fib`/`smap`/`sfilter`/`take`/`to_list`; `for`
+  loops and comprehensions force streams and lists through the same
+  protocol, and million-element pipelines run in constant memory.
 - A Bottle-flavored web framework written in SlopLang
   ([sloplib/web.slop](sloplib/web.slop)) with a concurrent development
   server ([examples/webapp.slop](examples/webapp.slop)):
