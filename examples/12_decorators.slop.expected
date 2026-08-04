@@ -1,0 +1,5 @@
+factory: 31
+stacked: <b>HELLO</b>
+class deco: marked
+registry: ['alpha', 'beta']
+still callable: 1 2

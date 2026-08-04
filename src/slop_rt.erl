@@ -826,7 +826,7 @@ setattr(Obj, Name, Val) when is_atom(Obj) ->
         undefined -> attr_err(Obj, Name);
         Info = #{attrs := As} ->
             persistent_term:put({slop_class, Obj}, Info#{attrs => maps:put(Name, Val, As)}),
-            Val
+            Obj
     end;
 setattr(_Obj, _Name, _Val) ->
     raise_exc('AttributeError', <<"attribute assignment not supported on this value">>).

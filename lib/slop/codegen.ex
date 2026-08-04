@@ -2504,9 +2504,18 @@ defmodule Slop.Codegen do
     t_var = fresh()
     acc2 = fresh()
 
-    {bind_expr, bind_ctx} = compile_assign(%{ctx | loop: nil}, target, h_var)
+    # the target binding compiles as a regular assign statement so tuple
+    # targets use the wrap machinery; the rest of the comprehension is the
+    # tail so leaf bindings stay in scope
+    hdr_name = "$comph$#{id}"
+    bind_env = Map.put(ctx.env, hdr_name, {:local, h_var, false})
+    bind_stmt = {:assign, 0, [target], {:name, 0, hdr_name}}
+    body_ctx = %{ctx | env: bind_env, loop: nil}
 
-    inner = comp_build(bind_ctx, rest, acc2, emit)
+    {inner_app, _} =
+      compile_stmts_tail(body_ctx, [bind_stmt], fn bc ->
+        apply_(fname(:"comp$#{id}", 2), [t_var, comp_build(bc, rest, acc2, emit)])
+      end)
 
     {iter_e, _} = compile_expr(ctx, iter)
 
@@ -2517,7 +2526,7 @@ defmodule Slop.Codegen do
        fun([l_var, acc2],
          case_(l_var, [
            clause([nil_()], acc2),
-           clause([cons(h_var, t_var)], seq(bind_expr, apply_(loop_fname, [t_var, inner])))
+           clause([cons(h_var, t_var)], inner_app)
          ])
        )}
 

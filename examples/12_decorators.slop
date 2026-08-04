@@ -1,0 +1,67 @@
+def deco_factory(a, b):
+    def wrap(f):
+        def inner(*args):
+            return f(*args) + a + b
+        return inner
+    return wrap
+
+@deco_factory(10, 20)
+def add(x):
+    return x
+
+print("factory:", add(1))
+
+def bold(f):
+    def w(*a):
+        return "<b>" + f(*a) + "</b>"
+    return w
+
+def shout(f):
+    def w(*a):
+        return f(*a).upper()
+    return w
+
+@bold
+@shout
+def greet():
+    return "hello"
+
+print("stacked:", greet())
+
+def tag(t):
+    def wrap(cls):
+        cls.tag = t
+        return cls
+    return wrap
+
+@tag("marked")
+class Thing:
+    pass
+
+print("class deco:", Thing.tag)
+
+import erlang.ets
+
+class Registry:
+    def __init__(self):
+        self.tid = ets.new(atom("reg"), [atom("public"), atom("bag")])
+    def register(self, name):
+        def wrap(f):
+            ets.insert(self.tid, (atom("name"), name))
+            return f
+        return wrap
+    def names(self):
+        return sorted([n for _, n in ets.tab2list(self.tid)])
+
+reg = Registry()
+
+@reg.register("alpha")
+def alpha():
+    return 1
+
+@reg.register("beta")
+def beta():
+    return 2
+
+print("registry:", reg.names())
+print("still callable:", alpha(), beta())
