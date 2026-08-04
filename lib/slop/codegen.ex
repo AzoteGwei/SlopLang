@@ -77,7 +77,7 @@ defmodule Slop.Codegen do
 
     name_var = fresh()
     attr_def =
-      {fname(:"$__attr__", 1), fun([name_var], compile_attr_lookup(name_var))}
+      {fname(:"$__attr__", 1), fun([name_var], compile_attr_lookup(ctx, name_var))}
 
     mod_info0 =
       {fname(:module_info, 0), fun([], call(:erlang, :get_module_info, [lit(mod_atom)]))}
@@ -117,28 +117,8 @@ defmodule Slop.Codegen do
     {:ok, mod_form, exports_list}
   end
 
-  defp compile_attr_lookup(name_var) do
-    init_result = fresh()
-    v = fresh()
-
-    let_([init_result], apply_(fname(:"$__init__", 0), []),
-      case_(
-        call(:maps, :find, [name_var, init_result]),
-        [
-          clause([tuple([lit(:ok), v])], v),
-          clause(
-            [fresh()],
-            call(:slop_rt, :raise_exc, [
-              lit(:AttributeError),
-              call(:erlang, :++, [
-                call(:erlang, :atom_to_binary, [name_var, lit(:utf8)]),
-                lit(<<"' is not defined in this module">>)
-              ])
-            ])
-          )
-        ]
-      )
-    )
+  defp compile_attr_lookup(ctx, name_var) do
+    call(:slop_rt, :mod_lookup, [lit(ctx.mod), name_var])
   end
 
   defp compile_init(ctx, stmts) do
@@ -146,21 +126,18 @@ defmodule Slop.Codegen do
 
     m = fresh()
 
-    get_map = call(:persistent_term, :get, [lit({:slop_mod, ctx.mod}), lit(:undefined)])
+    get_map = call(:slop_rt, :mod_inited, [lit(ctx.mod)])
 
     fun_body =
       case_(get_map, [
         clause(
-          [lit(:undefined)],
+          [lit(false)],
           seq(
-            call(:persistent_term, :put, [lit({:slop_mod, ctx.mod}), map_lit([])]),
-            seq(
-              suite_expr,
-              call(:persistent_term, :get, [lit({:slop_mod, ctx.mod}), map_lit([])])
-            )
+            call(:slop_rt, :mod_mark_inited, [lit(ctx.mod)]),
+            seq(suite_expr, lit(:ok))
           )
         ),
-        clause([m], m)
+        clause([m], lit(:ok))
       ])
 
     {fun_body, ctx}

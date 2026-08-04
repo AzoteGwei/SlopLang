@@ -35,8 +35,10 @@
          set_argv/1, exc_class_name/1, print_exc/2]).
 
 %% builtins (all take (PosArgs, KwArgs))
--export([atom/2, erl_mod/1, kw_from_dict/1,
+-export([atom/2, erl_mod/1, kw_from_dict/1, mod_inited/1, mod_mark_inited/1,
+         mod_lookup/2,
          spawn_task/2, join/2, sleep/2, send_msg/2, recv_msg/2, self_pid/2, monotonic/2,
+         cancel/2, is_alive/2, task_group/2, group_spawn/2, group_join/2,
          print/2, len/2, str/2, repr/2, int/2, float/2, bool/2, list/2,
          tuple/2, dict/2, set/2, range/2, enumerate/2, zip/2, map/2,
          filter/2, sorted/2, reversed/2, sum/2, min/2, max/2, abs/2,
@@ -181,12 +183,8 @@ raise_any(_) ->
     raise_exc('TypeError', <<"exceptions must derive from BaseException">>).
 
 global_del(Mod, Name) ->
-    case persistent_term:get({slop_mod, Mod}, undefined) of
-        M when is_map(M) ->
-            persistent_term:put({slop_mod, Mod}, maps:remove(Name, M)),
-            ?NIL;
-        _ -> ?NIL
-    end.
+    ets:delete(mod_table(), {Mod, Name}),
+    ?NIL.
 
 %%====================================================================
 %% Structural pattern matching (match statement)
@@ -904,7 +902,7 @@ is_record_tag(T) ->
     is_tuple(T) andalso tuple_size(T) > 0 andalso
         lists:member(element(1, T), ['$set', '$bound', '$tbound', '$static',
                                       '$classmeth', '$super', '$slice', '$slop_file',
-                                      '$erl_mod', '$erl_fun', '$task']).
+                                      '$erl_mod', '$erl_fun', '$task', '$group']).
 
 check_int_index(I) when is_integer(I) -> I;
 check_int_index(_) -> raise_exc('TypeError', <<"indices must be integers">>).
@@ -1489,6 +1487,7 @@ tagged_str({'$slice', Lo, Hi, Step}) ->
 tagged_str({'$slop_file', _}) -> <<"<file>">>;
 tagged_str({'$erl_mod', M}) ->
     <<"<erl_mod '", (atom_to_binary(M, utf8))/binary, "'>">>;
+tagged_str({'$group', _}) -> <<"<task_group>">>;
 tagged_str({'$task', P, _}) ->
     iolist_to_binary(io_lib:format("<task ~w>", [P]));
 tagged_str({'$erl_fun', M, F}) ->
@@ -1723,44 +1722,35 @@ unpack_star(Seq, Shape, StarIdx) ->
 -spec global_get(atom(), atom()) -> term().
 global_get(Mod, Name) ->
     module_ensure_init(Mod),
-    case persistent_term:get({slop_mod, Mod}, undefined) of
-        M when is_map(M) ->
-            case maps:find(Name, M) of
-                {ok, V} -> V;
-                error ->
-                    raise_exc('NameError', <<"name '", (atom_to_binary(Name, utf8))/binary,
-                              "' is not defined">>)
-            end;
-        _ ->
+    case ets:lookup(mod_table(), {Mod, Name}) of
+        [{_, V}] -> V;
+        [] ->
             raise_exc('NameError', <<"name '", (atom_to_binary(Name, utf8))/binary,
                       "' is not defined">>)
     end.
 
 -spec global_set(atom(), atom(), term()) -> term().
 global_set(Mod, Name, V) ->
-    case persistent_term:get({slop_mod, Mod}, undefined) of
-        M when is_map(M) -> persistent_term:put({slop_mod, Mod}, maps:put(Name, V, M));
-        _ -> persistent_term:put({slop_mod, Mod}, #{Name => V})
-    end,
+    ets:insert(mod_table(), {{Mod, Name}, V}),
     V.
 
 -spec module_ensure_init(atom()) -> term().
 module_ensure_init(Mod) ->
-    case persistent_term:get({slop_mod, Mod}, undefined) of
-        undefined -> Mod:'$__init__'();
-        M -> M
+    case mod_inited(Mod) of
+        false -> Mod:'$__init__'();
+        true -> ok
     end.
 
 module_ensure_init_safe(Mod) ->
-    case persistent_term:get({slop_mod, Mod}, undefined) of
-        undefined ->
+    case mod_inited(Mod) of
+        false ->
             try
                 _ = Mod:'$__attr__'('__name__'),
                 ok
             catch
                 _:_ -> error
             end;
-        _ -> ok
+        true -> ok
     end.
 
 -spec set_argv([binary()]) -> ok.
@@ -2053,25 +2043,173 @@ spawn_task_1(F, Args) ->
             end,
         Parent ! {'$slop_done', self(), Result}
     end),
+    register_task(Pid, Parent),
     {'$task', Pid, Ref}.
 
-join([{'$task', Pid, Ref}], _) ->
+%% join(task) waits forever; join(task, timeout_ms) returns None on expiry
+%% (the task keeps running and its result stays deliverable to a later join).
+join([{'$task', _, _} = T], _) -> join_wait(T, infinity);
+join([{'$task', _, _} = T, Timeout], _) when is_integer(Timeout), Timeout >= 0 ->
+    join_wait(T, Timeout);
+join(_, _) -> raise_exc('TypeError', <<"join() expects a task and optional timeout">>).
+
+join_wait(T, Timeout) ->
+    case join_poll(T, Timeout) of
+        ?NIL -> ?NIL;
+        {'$slop_ok', R} -> R;
+        {'$slop_err', E} -> join_error(E)
+    end.
+
+join_error({'$slop_exc', C, I}) -> throw({'$slop_exc', C, I});
+join_error({crash, Cl, Rs}) ->
+    raise_exc('RuntimeError', iolist_to_binary(
+        io_lib:format("task crashed: ~p:~p", [Cl, Rs])));
+join_error({down, Reason}) -> join_down(Reason).
+
+%% poll a task; returns nil on timeout, {'$slop_ok', R}, or {'$slop_err', E}
+join_poll({'$task', Pid, Ref}, Timeout) ->
     receive
         {'$slop_done', Pid, {ok, R}} ->
             demonitor(Ref, [flush]),
-            R;
-        {'$slop_done', Pid, {error, {'$slop_exc', C, I}}} ->
+            {'$slop_ok', R};
+        {'$slop_done', Pid, {error, {'$slop_exc', _, _} = E}} ->
             demonitor(Ref, [flush]),
-            throw({'$slop_exc', C, I});
+            {'$slop_err', E};
         {'$slop_done', Pid, {error, {Cl, Rs}}} ->
             demonitor(Ref, [flush]),
-            raise_exc('RuntimeError', iolist_to_binary(
-                io_lib:format("task crashed: ~p:~p", [Cl, Rs])));
+            {'$slop_err', {crash, Cl, Rs}};
         {'DOWN', Ref, process, Pid, Reason} ->
-            raise_exc('RuntimeError', iolist_to_binary(
-                io_lib:format("task died: ~p", [Reason])))
-    end;
-join(_, _) -> raise_exc('TypeError', <<"join() expects a task">>).
+            {'$slop_err', {down, Reason}}
+    after Timeout ->
+        ?NIL
+    end.
+
+join_down(slop_cancel) ->
+    raise_exc('RuntimeError', <<"task was cancelled">>);
+join_down(killed) ->
+    raise_exc('RuntimeError', <<"task was cancelled">>);
+join_down(Reason) ->
+    raise_exc('RuntimeError', iolist_to_binary(
+        io_lib:format("task died: ~p", [Reason]))).
+
+%% task tree registry (set table): {Pid, ParentPid} for tree cancel,
+%% {{group_count, Gid}, N} counters, {{gch, Gid, Idx}, Pid, Ref} children
+task_table() ->
+    case ets:whereis(slop_tasks) of
+        undefined ->
+            try ets:new(slop_tasks, [named_table, public, set])
+            catch _:_ -> slop_tasks
+            end;
+        T -> T
+    end.
+
+%% module environments live in an ETS table (one row per module):
+%% persistent_term would allocate literal space on every global_set
+mod_table() ->
+    case ets:whereis(slop_mods) of
+        undefined ->
+            try ets:new(slop_mods, [named_table, public, set])
+            catch _:_ -> slop_mods
+            end;
+        T -> T
+    end.
+
+%% one row per global: key {Mod, Name} -> V (copying one whole-module map
+%% per access would be quadratic for modules holding large values)
+mod_inited(Mod) ->
+    ets:lookup(mod_table(), {Mod, '$__inited__'}) =/= [].
+
+mod_mark_inited(Mod) ->
+    ets:insert(mod_table(), {{Mod, '$__inited__'}, true}),
+    true.
+
+mod_lookup(Mod, Name) ->
+    module_ensure_init(Mod),
+    case ets:lookup(mod_table(), {Mod, Name}) of
+        [{_, V}] -> V;
+        [] -> raise_exc('AttributeError',
+              <<(atom_to_binary(Name, utf8))/binary, "' is not defined in this module">>)
+    end.
+
+register_task(Pid, Parent) ->
+    ets:insert(task_table(), {Pid, Parent}).
+
+task_children(Pid) ->
+    [C || [C] <- ets:match(task_table(), {'$1', Pid})].
+
+task_subtree(Pid) ->
+    [Pid | lists:flatmap(fun task_subtree/1, task_children(Pid))].
+
+%% cancel(task): terminate the task and every task it spawned (recursively).
+%% The task's waiters observe a join/1 error ("task was cancelled").
+cancel([{'$task', Pid, _Ref}], _) ->
+    %% the monitor is left in place so waiters observe the task's death
+    lists:foreach(fun(P) -> erlang:exit(P, slop_cancel) end, lists:reverse(task_subtree(Pid))),
+    ?NIL;
+cancel(_, _) -> raise_exc('TypeError', <<"cancel() expects a task">>).
+
+is_alive([{'$task', Pid, _}], _) -> erlang:is_process_alive(Pid);
+is_alive(_, _) -> raise_exc('TypeError', <<"is_alive() expects a task">>).
+
+%% task groups: spawn children under a group id, join all with fail-fast or
+%% collect semantics
+task_group([], _) -> {'$group', make_ref()}.
+
+group_spawn([{'$group', Gid}, F], _) -> group_spawn_1(Gid, F, []);
+group_spawn([{'$group', Gid}, F, Args], _) when is_list(Args) -> group_spawn_1(Gid, F, Args);
+group_spawn(_, _) -> raise_exc('TypeError', <<"group_spawn() expects a group, a callable, optional args">>).
+
+group_spawn_1(Gid, F, Args) ->
+    {'$task', Pid, Ref} = T = spawn_task_1(F, Args),
+    Idx = ets:update_counter(task_table(), {group_count, Gid}, {2, 1}, {{group_count, Gid}, 0}),
+    ets:insert(task_table(), {{gch, Gid, Idx}, Pid, Ref}),
+    T.
+
+group_children(Gid) ->
+    lists:sort([{Idx, Pid, Ref} || [Idx, Pid, Ref] <-
+        ets:match(task_table(), {{gch, Gid, '$1'}, '$2', '$3'})]).
+
+%% group_join(group) | group_join(group, mode): mode is atom("fail_fast")
+%% (default; first observed failing child cancels the rest and re-raises the
+%% failure in the joiner) or atom("collect") (every child runs to
+%% completion; returns a list of (atom("ok"), value) /
+%% (atom("error"), message) tuples in spawn order)
+group_join([{'$group', Gid}], _) -> group_join_1(Gid, fail_fast);
+group_join([{'$group', Gid}, Mode], _) when is_atom(Mode) -> group_join_1(Gid, Mode);
+group_join(_, _) -> raise_exc('TypeError', <<"group_join() expects a group and optional mode">>).
+
+group_join_1(Gid, Mode) ->
+    Results = collect_group(group_children(Gid), Gid, Mode, #{}),
+    [V || {_, V} <- lists:sort(maps:to_list(Results))].
+
+collect_group([], _Gid, _Mode, Acc) ->
+    Acc;
+collect_group([{Idx, Pid, Ref} | Rest], Gid, Mode, Acc) ->
+    %% poll each child briefly so a failing later child is observed promptly
+    case join_poll({'$task', Pid, Ref}, 20) of
+        ?NIL ->
+            collect_group(Rest ++ [{Idx, Pid, Ref}], Gid, Mode, Acc);
+        {'$slop_ok', R} ->
+            V = case Mode of collect -> {ok, R}; fail_fast -> R end,
+            collect_group(Rest, Gid, Mode, maps:put(Idx, V, Acc));
+        {'$slop_err', E} ->
+            case Mode of
+                collect ->
+                    collect_group(Rest, Gid, Mode, maps:put(Idx, wrap_collect(E), Acc));
+                fail_fast ->
+                    lists:foreach(fun({_, P, _}) -> erlang:exit(P, slop_cancel) end, Rest),
+                    join_error(E)
+            end
+    end.
+
+wrap_collect({'$slop_exc', C, I}) ->
+    {error, print_exc(C, I)};
+wrap_collect({crash, Cl, Rs}) ->
+    {error, iolist_to_binary(io_lib:format("task crashed: ~p:~p", [Cl, Rs]))};
+wrap_collect({down, Reason}) when Reason =:= slop_cancel; Reason =:= killed ->
+    {error, <<"task was cancelled">>};
+wrap_collect({down, Reason}) ->
+    {error, iolist_to_binary(io_lib:format("task died: ~p", [Reason]))}.
 
 sleep([Ms], _) when is_integer(Ms), Ms >= 0 -> timer:sleep(Ms), ?NIL;
 sleep(_, _) -> raise_exc('TypeError', <<"sleep() expects milliseconds">>).
