@@ -1,0 +1,87 @@
+# task groups, join timeout, cancellation, 10k-task scale
+
+def slow(ms):
+    sleep(ms)
+    return "done"
+
+t = spawn(slow, [500])
+print("join 100ms:", join(t, 100))
+print("join rest:", join(t, 1000))
+
+def child(ms):
+    sleep(ms)
+    print("child finished (should not see)")
+    return 1
+
+def parent():
+    c = spawn(child, [5000])
+    print("parent alive, child spawned:", is_alive(c))
+    sleep(5000)
+    return 0
+
+p = spawn(parent)
+sleep(100)
+cancel(p)
+sleep(100)
+print("parent alive after cancel:", is_alive(p))
+try:
+    join(p)
+except RuntimeError as e:
+    print("join after cancel:", e)
+
+def grandchild():
+    sleep(5000)
+    print("grandchild finished (should not see)")
+
+def parent2():
+    spawn(grandchild)
+    sleep(5000)
+
+p2 = spawn(parent2)
+sleep(100)
+cancel(p2)
+sleep(100)
+print("tree cancelled ok")
+
+def worker(n):
+    sleep(50)
+    return n * 2
+
+g = task_group()
+for i in range(5):
+    group_spawn(g, worker, [i])
+print("fail_fast all ok:", group_join(g))
+
+def failer(n):
+    if n == 2:
+        raise ValueError("child 2 blew up")
+    sleep(100)
+    return n
+
+g2 = task_group()
+for i in range(4):
+    group_spawn(g2, failer, [i])
+print("collect:", group_join(g2, atom("collect")))
+
+g3 = task_group()
+for i in range(4):
+    group_spawn(g3, failer, [i])
+try:
+    group_join(g3)
+except ValueError as e:
+    print("fail_fast propagated:", e)
+
+def unit(n):
+    return n + 1
+
+N = 10000
+g4 = task_group()
+for i in range(N):
+    group_spawn(g4, unit, [i])
+print("group 10k sum:", sum(group_join(g4)))
+
+tasks = [spawn(unit, [i]) for i in range(N)]
+total = 0
+for t in tasks:
+    total += join(t)
+print("direct 10k sum:", total)

@@ -1,0 +1,11 @@
+join 100ms: None
+join rest: done
+parent alive, child spawned: True
+parent alive after cancel: False
+join after cancel: task was cancelled
+tree cancelled ok
+fail_fast all ok: [0, 2, 4, 6, 8]
+collect: [(ok, 0), (ok, 1), (error, 'SlopError: ValueError: child 2 blew up'), (ok, 3)]
+fail_fast propagated: child 2 blew up
+group 10k sum: 50005000
+direct 10k sum: 50005000
