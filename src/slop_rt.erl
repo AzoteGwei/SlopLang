@@ -36,8 +36,12 @@
          set_argv/1, exc_class_name/1, print_exc/2]).
 
 %% builtins (all take (PosArgs, KwArgs))
+-include_lib("kernel/include/file.hrl").
+
 -export([atom/2, erl_mod/1, kw_from_dict/1, mod_inited/1, mod_mark_inited/1,
-         mod_lookup/2,
+         mod_lookup/2, set_main_file/1, main_file/0, compile_paths/1, recompile/1,
+         note_server/0, wait_if_server/0, start_watcher/2,
+         http_handler/0, http_dispatch/2, register_http_app/1,
          spawn_task/2, join/2, sleep/2, send_msg/2, recv_msg/2, self_pid/2, monotonic/2,
          cancel/2, is_alive/2, task_group/2, group_spawn/2, group_join/2,
          print/2, len/2, str/2, repr/2, int/2, float/2, bool/2, list/2,
@@ -1792,6 +1796,148 @@ module_ensure_init_safe(Mod) ->
 
 -spec set_argv([binary()]) -> ok.
 set_argv(Args) -> persistent_term:put(slop_argv, Args), ok.
+
+%% ---- hot reload ----
+%% The entry .slop path is recorded at startup so debug-mode tooling (and
+%% user code via sloplib/sloplang.slop) can recompile it in place.
+set_main_file(Path) -> persistent_term:put(slop_main_file, Path), ok.
+
+main_file() -> persistent_term:get(slop_main_file, undefined).
+
+%% compile-only: returns {ok, [path_binary]} for the whole import tree
+compile_paths(Path) ->
+    case 'Elixir.Slop.Compiler':compile_file(Path) of
+        {ok, Mods, _Main} -> {ok, [to_bin(P) || P <- maps:keys(Mods)]};
+        {error, Msg} -> {error, to_bin(Msg)}
+    end.
+
+%% recompile a .slop file (plus its import tree) and load the new BEAM
+%% binaries into the running VM. Old and new code coexist per the BEAM
+%% two-version rule; module init markers and globals are cleared so the
+%% reloaded modules re-initialize from the new source.
+-spec recompile(binary() | string()) -> {ok, binary()} | {error, binary()}.
+recompile(Path) ->
+    case 'Elixir.Slop.Compiler':compile_file(Path) of
+        {ok, Mods, Main} ->
+            maps:fold(fun(_P, {M, B}, ok) -> reload_module(M, B) end, ok, Mods),
+            maps:foreach(fun(_P, {M, _B}) -> mod_forget(M) end, Mods),
+            _ = Main:'$__init__'(),
+            {ok, atom_to_binary(Main, utf8)};
+        {error, Msg} ->
+            {error, to_bin(Msg)}
+    end.
+
+reload_module(M, B) ->
+    case code:load_binary(M, "slop-reload", B) of
+        {module, M} ->
+            ok;
+        {error, not_purged} ->
+            %% two versions loaded already; evict the oldest
+            code:soft_purge(M),
+            case code:load_binary(M, "slop-reload", B) of
+                {module, M} ->
+                    ok;
+                {error, not_purged} ->
+                    %% processes still run the first old version; BEAM keeps
+                    %% at most two versions, so this forces them out (they
+                    %% are killed). Documented in docs/semantics.md.
+                    code:purge(M),
+                    {module, M} = code:load_binary(M, "slop-reload", B),
+                    ok
+            end
+    end.
+
+%% ---- debug-mode server keepalive + source watcher ----
+%% Both must run in frames that recompile/3 never purges: slop_rt is
+%% runtime infrastructure, not part of the compiled import tree.
+
+%% web.run(debug=True) marks the VM as serving; the CLI then blocks here
+%% (instead of inside user module code) so reloads never find user frames
+%% on the main process stack.
+note_server() -> persistent_term:put(slop_server_up, true), ok.
+
+wait_if_server() ->
+    case persistent_term:get(slop_server_up, false) of
+        true -> receive after infinity -> ok end;
+        false -> ok
+    end.
+
+%% The connection handler must live in purge-safe code: slop_http's accept
+%% loop holds the handler fun for the whole server lifetime, and a fun
+%% pointing into a reloaded module dies when that module's oldest version
+%% is evicted. http_dispatch/2 lives here (slop_rt is never recompiled) and
+%% resolves the current app per request.
+http_handler() -> fun http_dispatch/2.
+
+http_reg() ->
+    case ets:whereis(slop_http_reg) of
+        undefined ->
+            try ets:new(slop_http_reg, [named_table, public, set])
+            catch _:_ -> slop_http_reg
+            end;
+        T -> T
+    end.
+
+register_http_app(App) ->
+    http_reg(),
+    ets:insert(slop_http_reg, {current_app, App}),
+    ok.
+
+http_dispatch([Raw], _Kw) ->
+    http_reg(),
+    case ets:lookup(slop_http_reg, current_app) of
+        [{_, App}] -> call_method(App, handle, [Raw], #{});
+        [] -> #{<<"status">> => 500, <<"headers">> => #{},
+                <<"body">> => <<"no app registered
+">>}
+    end.
+
+start_watcher(Main, Paths) ->
+    spawn(fun() -> watch_loop(Main, mtimes(Paths)) end),
+    ok.
+
+mtimes(Paths) ->
+    maps:from_list([{P, mtime_of(P)} || P <- Paths]).
+
+mtime_of(P) ->
+    case file:read_file_info(P) of
+        {ok, FI} -> FI#file_info.mtime;
+        _ -> missing
+    end.
+
+watch_loop(Main, Known) ->
+    timer:sleep(400),
+    Changed = lists:any(fun(P) -> mtime_of(P) =/= maps:get(P, Known) end,
+                        maps:keys(Known)),
+    Known2 =
+        case Changed of
+            false ->
+                Known;
+            true ->
+                case recompile(Main) of
+                    {ok, _} ->
+                        io:format("SlopLang web: reloaded ~ts~n", [Main]);
+                    {error, Msg} ->
+                        io:format("SlopLang web: reload failed: ~ts~n", [Msg]),
+                        io:format("SlopLang web: keeping the previous version~n")
+                end,
+                case compile_paths(Main) of
+                    {ok, Paths} -> mtimes(Paths);
+                    _ -> mtimes(maps:keys(Known))
+                end
+        end,
+    watch_loop(Main, Known2).
+
+mod_forget(M) ->
+    mod_table(),
+    ets:match_delete(slop_mods, {{{M, '_'}}, '_'}),
+    ets:delete(slop_mods, {M, '$__inited__'}),
+    ok.
+
+to_bin(B) when is_binary(B) -> B;
+to_bin(L) when is_list(L) -> unicode:characters_to_binary(L);
+to_bin(A) when is_atom(A) -> atom_to_binary(A, utf8);
+to_bin(Other) -> iolist_to_binary(io_lib:format("~p", [Other])).
 
 %%====================================================================
 %% with statement

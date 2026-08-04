@@ -25,6 +25,9 @@ rebind rule, the pop protocol, by-value closures).
   tree-kill, `task_group` with fail-fast and collect modes, plus
   `send`/`recv` message passing — mapped to BEAM processes; 10 000
   tasks spawn and join in well under a second.
+- Hot reload: `sloplang.recompile(path)` swaps code in the running VM,
+  and `app.run(debug=True)` gives the web dev server Flask-style
+  source-watching reloads (broken edits keep serving the old version).
 - Lazy streams ([sloplib/stream.slop](sloplib/stream.slop)):
   `naturals`/`iterate`/`fib`/`smap`/`sfilter`/`take`/`to_list`; `for`
   loops and comprehensions force streams and lists through the same

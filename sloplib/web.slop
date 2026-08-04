@@ -8,6 +8,7 @@
 import erlang.ets
 import erlang.slop_http
 import erlang.erlang
+import erlang.slop_rt as _rt
 
 class HTTPError(Exception):
     def __init__(self, status, body=""):
@@ -129,9 +130,27 @@ def _match(pattern, path):
             return None
     return params
 
+# --- reload support (debug mode) ---
+# The app currently serving is registered in slop_rt's purge-safe ETS
+# registry; the connection handler (slop_rt:http_dispatch/2) resolves it
+# per request, so a reload installs a new App without touching the listen
+# socket or the handler fun.
+
+def _server_tid():
+    t = ets.whereis(atom("slop_web_servers"))
+    if t == atom("undefined"):
+        try:
+            ets.new(atom("slop_web_servers"), [atom("named_table"), atom("public"), atom("set")])
+        except Exception:
+            pass
+        t = ets.whereis(atom("slop_web_servers"))
+    return t
+
 class App:
     def __init__(self):
-        self._tid = ets.new(atom("slop_routes"), [atom("public"), atom("bag")])
+        # set (not bag): re-registering the same (method, pattern) replaces
+        self._tid = ets.new(atom("slop_routes"), [atom("public"), atom("set")])
+        _rt.register_http_app(self)
 
     def _add(self, method, pattern, f):
         ets.insert(self._tid, ((method, pattern), f))
@@ -232,11 +251,33 @@ class App:
                             e.status, {})
         return {"status": resp.status, "headers": resp.headers, "body": resp.body}
 
-    def run(self, host="127.0.0.1", port=8080):
+    def run(self, host="127.0.0.1", port=8080, debug=False):
         handler = lambda raw: self.handle(raw)
+        if debug:
+            tid = _server_tid()
+            if ets.lookup(tid, (atom("server"), port)) != []:
+                # a server is already listening on this port: this run()
+                # call comes from a reload; the new app is registered, the
+                # old socket keeps serving via slop_rt:http_dispatch
+                print("SlopLang web: new routes active on port", port)
+                return
+            ets.insert(tid, ((atom("server"), port), True))
+            main = _rt.main_file()
+            cp = _rt.compile_paths(main)
+            paths = [main]
+            if cp[0] == atom("ok"):
+                paths = cp[1]
+            _rt.start_watcher(main, paths)
+            print("SlopLang web: debug mode; watching", len(paths), "source file(s)")
+            handler = _rt.http_handler()
         result = slop_http.start(host, port, handler)
         if result[0] == atom("ok"):
             print("SlopLang web: listening on http://" + host + ":" + str(result[1]))
-            slop_http.wait()
+            if debug:
+                # the CLI blocks in slop_rt instead, so no user-module
+                # frames sit on the main process stack during reloads
+                _rt.note_server()
+            else:
+                slop_http.wait()
         else:
             print("SlopLang web: failed to start:", result[1])

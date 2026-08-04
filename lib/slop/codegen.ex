@@ -153,7 +153,15 @@ defmodule Slop.Codegen do
 
       {:import, _, mods}, acc ->
         Enum.reduce(mods, acc, fn {mod, asname}, a ->
-          Map.put(a, asname || hd(String.split(mod, ".")), {:module, String.to_atom(mod)})
+          case foreign_mod(mod) do
+            nil ->
+              Map.put(a, asname || hd(String.split(mod, ".")), {:module, String.to_atom(mod)})
+
+            _erl_atom ->
+              # `import erlang.MOD` binds the last segment (matching
+              # compile_stmt); the runtime value is an erl_mod tuple
+              Map.put(a, asname || List.last(String.split(mod, ".")), :value)
+          end
         end)
 
       {:from, _, _mod, names}, acc when is_list(names) ->

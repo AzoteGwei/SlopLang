@@ -266,6 +266,55 @@ shared state should keep that state in ETS or a process (immutable values
 make instance-mutating registration invisible to later readers); see
 `sloplib/web.slop` and `examples/12_decorators.slop`.
 
+## Hot reload
+
+SlopLang code can be swapped into a running VM without a restart.
+
+**Entry point.** `import sloplang` → `sloplang.recompile(path)` recompiles
+a `.slop` file plus its import tree and loads the new BEAM binaries with
+`code:load_binary/3`. It returns `(ok, module_name)` or `(error,
+message)`; a failed compile leaves the running code untouched. The
+wrapper lives in `sloplib/sloplang.slop`; the primitive is
+`slop_rt:recompile/1` because compilation and code loading are VM
+services.
+
+**Reload semantics.** BEAM keeps at most two versions of a module; this
+is what reloads mean for each kind of state:
+
+- **Running tasks/processes** keep executing the version they started
+  on until they return from it. New calls go to the new version. If a
+  *second* reload happens while a process still runs the *oldest*
+  version, the VM's two-version limit forces that process out — it is
+  killed by `code:purge/1`. In practice only in-flight web requests hit
+  this; the keep-alive process and the source watcher run inside
+  `slop_rt` (never recompiled) precisely so reloads never find user
+  frames on their stacks.
+- **Module globals** (the per-name ETS rows backing module state) are
+  cleared for every recompiled module and re-initialized from the new
+  source on next access: reload *resets* module-level state. Named ETS
+  tables, process dictionaries, and registered names survive — code
+  that owns them must be idempotent or check for existing state
+  (the web framework does both).
+- **Existing instances and closures.** A closure captures its code
+  version and keeps it. Instances created before a reload dispatch
+  method calls to the *new* class code (class registration is by name),
+  while their attribute maps are untouched.
+- **The web route registry.** Routes live in a per-App ETS *set* table
+  keyed by `(method, pattern)`. A reload builds a fresh App (fresh
+  table), and re-registering an identical route replaces rather than
+  duplicates — repeated reloads never accumulate duplicate routes.
+
+**Debug server.** `app.run(port=..., debug=True)` starts a watcher (in
+`slop_rt`, polling mtimes of the entry file and its import tree every
+400 ms). On change it recompiles and re-registers the app; the listen
+socket and the connection-handler fun (`slop_rt:http_dispatch/2`) are
+never touched, so there is no downtime window. A broken edit logs
+`reload failed: ...` / `keeping the previous version` and the old code
+keeps serving; the next valid edit reloads normally. Editing the
+framework itself (`sloplib/web.slop`, `slop_rt`, `slop_http`) requires a
+restart — the watcher only watches the application tree, and
+runtime-infrastructure code is deliberately kept out of the purge path.
+
 ## The web framework (sloplib/web.slop)
 
 Bottle-flavored, implemented in SlopLang itself:
@@ -279,7 +328,9 @@ Bottle-flavored, implemented in SlopLang itself:
   `abort(status, body)`, `HTTPError`.
 - `current_request()` — the request being handled (method, path, query,
   query_string, headers, body), stored in the connection process.
-- `app.run(host, port)` — blocking development server backed by
+- `app.run(host, port, debug=False)` — development server backed by
   `slop_http` (gen_tcp + OTP HTTP packet parsing, one spawned process per
-  connection, so requests are served concurrently).
+  connection, so requests are served concurrently). With `debug=True` it
+  additionally watches the app's sources and hot-reloads on change (see
+  "Hot reload").
 - Deferred: templates, static files, middleware, keep-alive, HTTPS.

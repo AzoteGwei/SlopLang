@@ -1,0 +1,19 @@
+# sloplang — SlopLang self-tools.
+#
+# recompile(path) recompiles a .slop file (plus its import tree) and loads
+# the new code into the running VM — same VM, no restart. Wraps the
+# Erlang-side runtime primitive slop_rt:recompile/1, because compilation
+# and code loading are VM services (the compiler is part of the toolchain
+# escript, code loading is code:load_binary/3).
+#
+# Returns (ok, module_name) on success, (error, message) otherwise; on
+# error the previously loaded code is left untouched.
+#
+# See docs/semantics.md ("Hot reload") for the reload semantics: module
+# globals are re-initialized, running processes keep their old code, and
+# the second reload while old code is still running forces stragglers out.
+
+import erlang.slop_rt as _rt
+
+def recompile(path):
+    return _rt.recompile(path)

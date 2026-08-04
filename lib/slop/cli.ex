@@ -28,6 +28,7 @@ defmodule Slop.CLI do
 
   defp run(file, args) do
     :application.set_env(:slop, :argv, args)
+    :slop_rt.set_main_file(file |> Path.expand() |> to_string())
 
     case Slop.Compiler.compile_file(file) do
       {:ok, mods, main} ->
@@ -37,6 +38,7 @@ defmodule Slop.CLI do
 
         try do
           apply(mod_atom, :"$__init__", [])
+          :slop_rt.wait_if_server()
           :ok
         rescue
           e -> reraise(e, __STACKTRACE__)
