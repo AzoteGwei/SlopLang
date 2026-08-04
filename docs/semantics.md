@@ -190,14 +190,46 @@ SlopLang tasks are BEAM processes:
   process; returns a task handle.
 - `join(task)` — blocks until the task finishes; returns its result, or
   re-raises the task's SlopLang exception in the joiner. A dead task
-  raises `RuntimeError`.
+  raises `RuntimeError`. `join(task, timeout_ms)` returns `None` on
+  timeout (the task keeps running and the result stays deliverable to a
+  later `join`).
+- `cancel(task)` — terminates the task and its spawned descendants
+  (tree kill). Joiners observe `RuntimeError("task was cancelled")`.
+- `is_alive(task)` — `True` while the task process is running.
+- `task_group()` — a group; `group_spawn(g, f, args)` spawns a member,
+  `group_join(g)` returns member results in spawn order. On the first
+  failure the remaining members are cancelled and the exception
+  re-raised (fail-fast). `group_join(g, atom("collect"))` instead
+  returns a list of `(ok, result)` / `(error, message)` tuples, one per
+  member in spawn order, without raising.
 - `send(pid_or_task, msg)` / `recv()` / `recv(timeout_ms)` — raw BEAM
   message passing; any SlopLang value is a valid message. `recv` with a
   timeout returns `None` on expiry.
 - `sleep(ms)`, `self_pid()`, `monotonic()` (milliseconds).
 
 Because tasks are ordinary processes, IO (print) interleaves and message
-passing works between any of them.
+passing works between any of them. Spawning and joining 10 000 tasks
+takes well under a second (see `examples/13_taskgroups.slop`).
+
+## Rejected designs
+
+- **`async`/`await`** — rejected. SlopLang has no colored functions:
+  concurrency is plain `spawn`/`join` over BEAM processes, which already
+  give preemptive scheduling, per-process heaps, and distribution. An
+  async subset would need an effect-typed call protocol and would
+  duplicate what the runtime already does for every function. Blocking
+  is cheap here, so `join` is the whole story.
+- **`yield` / generators** — rejected. Generators suspend a call frame
+  mid-execution, which the compile-to-Core-Erlang pipeline cannot
+  represent without CPS-transforming every function (killing
+  interoperability and stack traces). Lazy sequences are provided as a
+  library type instead: `sloplib/stream.slop` builds streams from thunks
+  (`naturals`, `iterate`, `fib`, `smap`, `sfilter`, `take`, `to_list`),
+  and `for` loops/comprehensions force any sequence uniformly.
+
+The parser rejects `async`, `await`, and `yield` with an error pointing
+here, so code using them fails loudly at compile time rather than
+silently misbehaving.
 
 ## Decorator expressions
 

@@ -146,7 +146,7 @@ defmodule Slop.Parser do
 
           match?({:kw, _, kw} when kw in ["yield", "async", "await"], peek(st)) ->
             {:kw, line, kw} = peek(st)
-            err(line, "#{kw} is not supported in SlopLang")
+            err(line, "#{kw} is not supported in SlopLang; see 'Rejected designs' in docs/semantics.md")
 
           true ->
             case stmt(st) do
@@ -1538,6 +1538,9 @@ defmodule Slop.Parser do
 
   defp unary_expr(st) do
     case peek(st) do
+      {:kw, line, kw} when kw in ["await", "yield"] ->
+        err(line, "#{kw} is not supported in SlopLang; see 'Rejected designs' in docs/semantics.md")
+
       {:op, line, op} when op in ["-", "+", "~"] ->
         st = advance(st)
 
