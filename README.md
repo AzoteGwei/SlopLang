@@ -52,6 +52,12 @@ def hello(name):
 app.run(port=8080)
 ```
 
+- Dynamic execution: `eval(source)` / `exec(source)` compile strings at
+  runtime against a persistent shared context (the caller's module by
+  default, or a named one), and `slopc repl` gives an interactive
+  Python-style REPL with `>>>` / `... ` prompts, multi-line blocks,
+  Ctrl-C line interrupts, and piped-stdin transcripts.
+
 Imports resolve relative to the importing file, then `SLOP_PATH`
 (colon-separated), then the toolchain's `sloplib/`.
 
@@ -67,6 +73,7 @@ mix escript.build      # produces ./slopc
 
 ```sh
 ./slopc run examples/hello.slop        # compile + execute
+./slopc repl                           # interactive REPL (piped stdin works too)
 ./slopc build examples/hello.slop -o ebin_out   # write .beam files
 ./slopc dump examples/hello.slop       # print generated Core Erlang
 ./slopc tokens examples/hello.slop     # debug: token stream

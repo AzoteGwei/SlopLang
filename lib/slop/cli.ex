@@ -11,8 +11,15 @@ defmodule Slop.CLI do
   """
 
   def main(argv) do
+    # the module-globals ETS table is owned by its creator process; make
+    # it here in the long-lived main process so REPL executors (which
+    # are spawned per line and may be killed by Ctrl-C) never own it
+    :slop_rt.mod_table()
+
     case argv do
       ["run", file | rest] -> run(file, rest)
+      ["repl"] -> Slop.Repl.run()
+      [] -> Slop.Repl.run()
       ["build", file | rest] -> build(file, rest)
       ["tokens", file] -> tokens(file)
       ["parse", file] -> parse(file)
@@ -22,7 +29,7 @@ defmodule Slop.CLI do
   end
 
   defp usage do
-    IO.puts("slopc run FILE.slop [ARGS...] | build FILE.slop -o DIR | tokens FILE | parse FILE | dump FILE")
+    IO.puts("slopc run FILE.slop [ARGS...] | repl | build FILE.slop -o DIR | tokens FILE | parse FILE | dump FILE")
     System.halt(2)
   end
 

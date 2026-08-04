@@ -379,6 +379,36 @@ like `exec`'d functions persist in a Python session. Transient calls
 reuse the base module name, so `eval` in a loop does not leak atoms;
 each *retained* closure necessarily retains its module.
 
+## The REPL (slopc repl)
+
+`slopc repl` (or bare `slopc`) starts an interactive read-eval-print
+loop. Each line is first parsed as an expression — if it parses, it is
+evaluated and its `repr` printed (unless `None`); otherwise it runs as
+a statement. All input shares one dynamic context (the `eval`/`exec`
+context named `"repl"`), so names defined on one line are visible on
+every later line. Errors (`SyntaxError`, runtime exceptions) print as
+`ClassName: message` and never end the session.
+
+**Continuation lines.** A line that cannot be complete (it ends with
+`:`, or a bracket/string is unterminated — detected from the parser's
+`eof` / `unexpected newline` errors) gets a `...` prompt. Bracket
+continuations run as soon as they parse; compound statements (`if`,
+`def`, `while`, ...) run when a blank line ends the block, matching
+CPython's interactive rule.
+
+**TTY vs pipe.** With piped stdin the REPL prints no banner or prompts
+and simply evaluates the input stream (handy for scripted transcripts).
+On a TTY it prints a banner, `>>> ` / `... ` prompts, and puts the
+terminal in raw mode: Ctrl-C interrupts the currently executing line
+(`KeyboardInterrupt`, the session survives) or abandons the line being
+typed, Ctrl-D at an empty prompt exits, backspace edits, and the up and
+down arrows walk the session history. The terminal mode is restored on
+exit (and via `System.at_exit`). Ctrl-C support is implemented as a
+raw-mode byte (`0x03`) watched by the REPL while a per-line executor
+task runs — OTP's `os:set_signal/2` does not handle `sigint`, so signal
+delivery is not an option; killing the executor task is what makes the
+interrupt prompt.
+
 ## The web framework (sloplib/web.slop)
 
 Bottle-flavored, implemented in SlopLang itself:

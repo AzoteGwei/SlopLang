@@ -38,7 +38,7 @@
 %% builtins (all take (PosArgs, KwArgs))
 -include_lib("kernel/include/file.hrl").
 
--export([atom/2, erl_mod/1, kw_from_dict/1, mod_inited/1, mod_mark_inited/1,
+-export([atom/2, erl_mod/1, kw_from_dict/1, mod_inited/1, mod_mark_inited/1, mod_table/0,
          mod_lookup/2, set_main_file/1, main_file/0, compile_paths/1, recompile/1,
          note_server/0, wait_if_server/0, start_watcher/2,
          http_handler/0, http_dispatch/2, register_http_app/1,
