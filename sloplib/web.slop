@@ -195,6 +195,27 @@ class App:
             return None
         return (best[1], best[2])
 
+    def _call_handler(self, f, params, query):
+        # query params are offered as keyword arguments; params the
+        # handler doesn't declare are filtered out one by one
+        q = dict(query)
+        while True:
+            try:
+                return f(*params, **q)
+            except TypeError as e:
+                bad = None
+                if len(e.args) > 0:
+                    msg = e.args[0]
+                    if isinstance(msg, str) and "unexpected keyword argument '" in msg:
+                        bad = msg.split("'")[1]
+                if bad == None:
+                    raise
+                q2 = {}
+                for k in q:
+                    if k != bad:
+                        q2[k] = q[k]
+                q = q2
+
     def handle(self, raw):
         req = Request(raw)
         erlang.put(atom("slop_req"), req)
@@ -204,7 +225,7 @@ class App:
                 resp = Response("not found: " + req.method + " " + req.path + "\n", 404, {})
             else:
                 f, params = hit
-                result = f(*params, **req.query)
+                result = self._call_handler(f, params, req.query)
                 resp = self._convert(result)
         except HTTPError as e:
             resp = Response(e.body if e.body != "" else "error " + str(e.status) + "\n",
