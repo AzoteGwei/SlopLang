@@ -52,6 +52,7 @@ defmodule Slop.Codegen do
       self_name: nil,
       ret_id: nil,
       exc_info: nil,
+      mod_map: Keyword.get(opts, :mod_map, %{}),
       mod_bindings: mod_bindings,
       defs: [],
       opts: opts,
@@ -985,6 +986,14 @@ defmodule Slop.Codegen do
     end)
   end
 
+  # resolves a slop import path to the compiled module atom (stdlib
+  # modules are namespaced by the compiler's mod_map)
+  defp slop_mod_atom(ctx, mod) do
+    top = mod |> String.split(".") |> hd()
+    atom_s = Map.get(ctx.mod_map, top, mod)
+    String.to_atom(atom_s)
+  end
+
   # maps an import path to a BEAM module atom, or nil for slop modules
   defp foreign_mod("erlang." <> rest), do: String.to_atom(rest)
 
@@ -994,7 +1003,7 @@ defmodule Slop.Codegen do
   defp foreign_mod(_), do: nil
 
   defp do_slop_import(acc, c, mod, asname) do
-    mod_atom = String.to_atom(mod)
+    mod_atom = slop_mod_atom(c, mod)
     name = asname || hd(String.split(mod, "."))
     ensure = call(:slop_rt, :module_ensure_init, [lit(mod_atom)])
 
@@ -1019,7 +1028,7 @@ defmodule Slop.Codegen do
   end
 
   defp compile_stmt(ctx, {:from, _, mod, names}) do
-    mod_atom = String.to_atom(mod)
+    mod_atom = slop_mod_atom(ctx, mod)
 
     resolved_names =
       case names do

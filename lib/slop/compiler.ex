@@ -32,6 +32,20 @@ defmodule Slop.Compiler do
     end
   end
 
+  # the toolchain's bundled sloplib/ (stdlib modules get namespaced atoms
+  # so they can never shadow OTP modules like :math or :os in the code
+  # server)
+  def toolchain_lib do
+    try do
+      Path.join(Path.dirname(to_string(:escript.script_name())), "sloplib")
+      |> Path.expand()
+    rescue
+      _ -> nil
+    catch
+      _, _ -> nil
+    end
+  end
+
   # import resolution: the importing file's directory, then SLOP_PATH
   # (colon-separated), then the toolchain's bundled sloplib/
   defp default_search_path(path) do
@@ -42,12 +56,9 @@ defmodule Slop.Compiler do
       end
 
     toolchain_lib =
-      try do
-        [Path.join(Path.dirname(to_string(:escript.script_name())), "sloplib")]
-      rescue
-        _ -> []
-      catch
-        _, _ -> []
+      case toolchain_lib() do
+        nil -> []
+        lib -> [lib]
       end
 
     ([Path.dirname(path)] ++ env ++ toolchain_lib)
@@ -69,8 +80,8 @@ defmodule Slop.Compiler do
           {:error, _} = e ->
             e
 
-          {:ok, seen} ->
-            with {:ok, forms, _} <- codegen(ast, modname, main?: abs == entry),
+          {:ok, seen, mod_map} ->
+            with {:ok, forms, _} <- codegen(ast, modname, main?: abs == entry, mod_map: mod_map),
                  {:ok, mod_atom, bin} <- compile_forms(forms) do
               {:ok, Map.put(seen, abs, {mod_atom, bin}), mod_atom}
             end
@@ -83,12 +94,15 @@ defmodule Slop.Compiler do
     do: String.starts_with?(path, "erlang.") or String.starts_with?(path, "elixir.")
 
   defp compile_imports(imports, from_file, search_path, entry, seen) do
-    Enum.reduce_while(imports, {:ok, seen}, fn name, {:ok, acc} ->
+    Enum.reduce_while(imports, {:ok, seen, %{}}, fn name, {:ok, acc, mod_map} ->
       case find_module_file(name, Path.dirname(from_file), search_path) do
         {:ok, file} ->
           case compile_tree(file, search_path, entry, acc) do
-            {:ok, acc2, _} -> {:cont, {:ok, acc2}}
-            {:error, _} = e -> {:halt, e}
+            {:ok, acc2, _} ->
+              {:cont, {:ok, acc2, Map.put(mod_map, name, modname_for(Path.expand(file)))}}
+
+            {:error, _} = e ->
+              {:halt, e}
           end
 
         :error ->
@@ -130,7 +144,19 @@ defmodule Slop.Compiler do
   end
 
   defp modname_for(abs) do
-    abs |> Path.basename(".slop") |> String.replace(~r/[^a-zA-Z0-9_]/, "_")
+    base = abs |> Path.basename(".slop") |> String.replace(~r/[^a-zA-Z0-9_]/, "_")
+
+    case toolchain_lib() do
+      nil ->
+        base
+
+      lib ->
+        if Path.dirname(abs) == lib do
+          "slop$" <> base
+        else
+          base
+        end
+    end
   end
 
   defp read_file(path) do

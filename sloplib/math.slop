@@ -1,0 +1,113 @@
+# math — mathematical constants and functions.
+# Follows Python's math module where the operations map onto IEEE doubles;
+# thin wrapper over OTP's :math plus pure-SlopLang helpers. Deviations:
+# no separate integer-returning variants for everything (ceil/floor/trunc
+# return ints like Python), factorial/isqrt/gcd/lcm are exact integers
+# (BEAM bignums), no erf/gamma/lgamma (not in OTP :math). BEAM floats trap
+# on overflow and divide-by-zero instead of producing inf/nan, so this
+# module has no inf/nan/isinf/isnan/isfinite (a documented deviation:
+# those operations raise instead).
+
+import erlang.math as _m
+
+pi = 3.141592653589793
+e = 2.718281828459045
+tau = 6.283185307179586
+def sqrt(x):
+    return _m.sqrt(x)
+
+def pow(x, y):
+    return _m.pow(x, y)
+
+def exp(x):
+    return _m.exp(x)
+
+def log(x):
+    return _m.log(x)
+
+def log2(x):
+    return _m.log2(x)
+
+def log10(x):
+    return _m.log10(x)
+
+def sin(x):
+    return _m.sin(x)
+
+def cos(x):
+    return _m.cos(x)
+
+def tan(x):
+    return _m.tan(x)
+
+def asin(x):
+    return _m.asin(x)
+
+def acos(x):
+    return _m.acos(x)
+
+def atan(x):
+    return _m.atan(x)
+
+def atan2(y, x):
+    return _m.atan2(y, x)
+
+def floor(x):
+    f = _m.floor(x)
+    return int(f)
+
+def ceil(x):
+    c = _m.ceil(x)
+    return int(c)
+
+def trunc(x):
+    if x >= 0:
+        return floor(x)
+    return 0 - floor(0 - x)
+
+def fabs(x):
+    return abs(float(x))
+
+def fmod(x, y):
+    return _m.fmod(x, y)
+
+def isclose(a, b, rel_tol=1e-09, abs_tol=0.0):
+    return abs(a - b) <= max(rel_tol * max(abs(a), abs(b)), abs_tol)
+
+def gcd(a, b):
+    a = abs(a)
+    b = abs(b)
+    while b != 0:
+        a, b = b, a % b
+    return a
+
+def lcm(a, b):
+    if a == 0 or b == 0:
+        return 0
+    return abs(a * b) // gcd(a, b)
+
+def factorial(n):
+    if n < 0:
+        raise ValueError("factorial() not defined for negative values")
+    out = 1
+    for i in range(2, n + 1):
+        out = out * i
+    return out
+
+def isqrt(n):
+    if n < 0:
+        raise ValueError("isqrt() argument must be nonnegative")
+    if n == 0:
+        return 0
+    x = n
+    y = (x + 1) // 2
+    while y < x:
+        x = y
+        y = (x + n // x) // 2
+    return x
+
+def degrees(x):
+    return x * 180.0 / pi
+
+def radians(x):
+    return x * pi / 180.0
