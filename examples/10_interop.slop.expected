@@ -1,0 +1,7 @@
+[3, 2, 1]
+9
+True
+HELLO BEAM
+['a', 'b', 'c']
+<erl_fun 'lists:foldl'>
+ok True

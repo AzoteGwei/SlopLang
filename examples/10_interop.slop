@@ -1,0 +1,13 @@
+import erlang.lists
+import erlang.crypto
+import elixir.String
+
+print(lists.reverse([1, 2, 3]))
+print(lists.max([4, 9, 2]))
+print(crypto.strong_rand_bytes(4) != "")
+print(String.upcase("hello beam"))
+print(String.split("a,b,c", ","))
+h = lists.foldl
+print(h)
+ok = atom("ok")
+print(ok, ok == atom("ok"))

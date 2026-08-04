@@ -6,6 +6,7 @@ defmodule Slop.Builtins do
   """
 
   @table %{
+    "atom" => {:slop_rt, :atom},
     "print" => {:slop_rt, :print},
     "len" => {:slop_rt, :len},
     "repr" => {:slop_rt, :repr},

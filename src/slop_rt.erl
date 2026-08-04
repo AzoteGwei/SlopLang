@@ -35,7 +35,8 @@
          set_argv/1, exc_class_name/1, print_exc/2]).
 
 %% builtins (all take (PosArgs, KwArgs))
--export([print/2, len/2, str/2, repr/2, int/2, float/2, bool/2, list/2,
+-export([atom/2, erl_mod/1,
+         print/2, len/2, str/2, repr/2, int/2, float/2, bool/2, list/2,
          tuple/2, dict/2, set/2, range/2, enumerate/2, zip/2, map/2,
          filter/2, sorted/2, reversed/2, sum/2, min/2, max/2, abs/2,
          all/2, any/2, chr/2, ord/2, hex/2, oct/2, bin/2, round/2,
@@ -617,10 +618,18 @@ invoke(Obj, Pos, Kw) when is_map(Obj) ->
         _ ->
             raise_exc('TypeError', <<"'dict' object is not callable">>)
     end;
+invoke({'$erl_fun', M, F}, Pos, Kw) ->
+    Args = case maps:to_list(Kw) of
+        [] -> Pos;
+        Kws -> Pos ++ [[{binary_to_atom(K, utf8), V} || {K, V} <- Kws]]
+    end,
+    apply(M, F, Args);
 invoke(_, _, _) ->
     raise_exc('TypeError', <<"object is not callable">>).
 
 -spec call_method(term(), atom(), list(), map()) -> term().
+call_method({'$erl_mod', _} = EM, Name, Pos, Kw) ->
+    invoke(getattr(EM, Name), Pos, Kw);
 call_method(Obj, Name, Pos, Kw) when is_map(Obj) ->
     case Obj of
         #{'$class' := _C} -> invoke(getattr(Obj, Name), Pos, Kw);
@@ -671,6 +680,12 @@ method_exported(Mod, Name) ->
     erlang:function_exported(Mod, Name, 3).
 
 -spec getattr(term(), atom()) -> term().
+getattr({'$erl_mod', M}, Name) ->
+    code:ensure_loaded(M),
+    case erlang:function_exported(M, Name, 0) of
+        true -> {'$erl_fun', M, Name};
+        false -> {'$erl_fun', M, Name}
+    end;
 getattr(Obj, Name) when is_map(Obj) ->
     case Obj of
         #{'$class' := C} ->
@@ -880,7 +895,8 @@ getitem(Obj, _Idx) ->
 is_record_tag(T) ->
     is_tuple(T) andalso tuple_size(T) > 0 andalso
         lists:member(element(1, T), ['$set', '$bound', '$tbound', '$static',
-                                      '$classmeth', '$super', '$slice', '$slop_file']).
+                                      '$classmeth', '$super', '$slice', '$slop_file',
+                                      '$erl_mod', '$erl_fun']).
 
 check_int_index(I) when is_integer(I) -> I;
 check_int_index(_) -> raise_exc('TypeError', <<"indices must be integers">>).
@@ -1430,6 +1446,10 @@ to_str(M) when is_map(M) ->
             iolist_to_binary(["{", join_iolist(Inner, ", "), "}"])
     end;
 to_str(F) when is_function(F, 2) -> <<"<function>">>;
+to_str(P) when is_pid(P) ->
+    iolist_to_binary(io_lib:format("<pid ~w>", [P]));
+to_str(R) when is_reference(R) ->
+    iolist_to_binary(io_lib:format("<ref ~w>", [R]));
 to_str(A) when is_atom(A) ->
     case is_slop_class(A) orelse lists:member(A, builtin_classes()) of
         true ->
@@ -1459,6 +1479,11 @@ tagged_str({'$slice', Lo, Hi, Step}) ->
     <<"slice(", (to_repr(Lo))/binary, ", ", (to_repr(Hi))/binary, ", ",
       (to_repr(Step))/binary, ")">>;
 tagged_str({'$slop_file', _}) -> <<"<file>">>;
+tagged_str({'$erl_mod', M}) ->
+    <<"<erl_mod '", (atom_to_binary(M, utf8))/binary, "'>">>;
+tagged_str({'$erl_fun', M, F}) ->
+    <<"<erl_fun '", (atom_to_binary(M, utf8))/binary, ":",
+      (atom_to_binary(F, utf8))/binary, "'>">>;
 tagged_str(T) -> iolist_to_binary(io_lib:format("~p", [T])).
 
 default_obj_str(#{'$class' := C, args := Args}) ->
@@ -1977,6 +2002,12 @@ length_of(X) ->
               "' has no len()">>).
 
 str(Pos, Kw) -> instantiate_builtin('str', Pos, Kw).
+atom([B], _) when is_binary(B) -> binary_to_atom(B, utf8);
+atom([A], _) when is_atom(A) -> A;
+atom(_, _) -> raise_exc('TypeError', <<"atom() expects a string">>).
+
+erl_mod(M) when is_atom(M) -> {'$erl_mod', M}.
+
 repr([X], _) -> to_repr(X);
 repr(_, _) -> raise_exc('TypeError', <<"repr() takes exactly one argument">>).
 int(Pos, Kw) -> instantiate_builtin('int', Pos, Kw).

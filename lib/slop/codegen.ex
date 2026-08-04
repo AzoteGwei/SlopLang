@@ -58,15 +58,17 @@ defmodule Slop.Codegen do
       main?: Keyword.get(opts, :main?, false)
     }
 
-    # pre-compile top-level function defs
-    {ctx, top_defs} =
-      Enum.reduce(stmts, {ctx, []}, fn
-        {:def, _, name, params, body, _decos, _ann}, {c, acc} ->
+    # pre-compile top-level function defs, plus a public `name/2` entry
+    # point (ArgsList, KwMap) so Erlang/Elixir can call them directly
+    {ctx, top_defs, pub_defs} =
+      Enum.reduce(stmts, {ctx, [], []}, fn
+        {:def, _, name, params, body, _decos, _ann}, {c, acc, pubs} ->
           {defc, defn} = compile_fundef(c, name, params, body, nil)
-          {defc, acc ++ [defn]}
+          {wrapper, defc2} = pub_wrapper(defc, name, params)
+          {defc2, acc ++ [defn], pubs ++ [wrapper]}
 
-        _, acc ->
-          acc
+        _, {c, acc, pubs} ->
+          {c, acc, pubs}
       end)
 
     {init_body, ctx} = compile_init(ctx, stmts)
@@ -86,14 +88,24 @@ defmodule Slop.Codegen do
       {fname(:module_info, 1),
        fun([mi1_arg], call(:erlang, :get_module_info, [lit(mod_atom), mi1_arg]))}
 
-    all_defs = top_defs ++ ctx.defs ++ [init_def, attr_def, mod_info0, mod_info1]
+    all_defs = top_defs ++ pub_defs ++ ctx.defs ++ [init_def, attr_def, mod_info0, mod_info1]
 
-    exports = [
-      fname(:"$__init__", 0),
-      fname(:"$__attr__", 1),
-      fname(:module_info, 0),
-      fname(:module_info, 1)
-    ]
+    pub_exports =
+      Enum.flat_map(pub_defs, fn {{:c_var, _, {n, _}}, _} ->
+        [fname(n, 2), fname(n, 3)]
+      end)
+
+    # class methods live as 'mod.Class.method'/3 defs; export them too
+    method_exports =
+      Enum.map(ctx.defs, fn {{:c_var, _, {n, a}}, _} -> fname(n, a) end)
+
+    exports =
+      [
+        fname(:"$__init__", 0),
+        fname(:"$__attr__", 1),
+        fname(:module_info, 0),
+        fname(:module_info, 1)
+      ] ++ pub_exports ++ method_exports
 
     mod_form = :cerl.c_module(lit(mod_atom), exports, [], all_defs)
 
@@ -365,6 +377,30 @@ defmodule Slop.Codegen do
       Enum.map_reduce(defaults, ctx, fn {_, d, _}, c -> compile_expr(c, d) end)
 
     {fun([a, k], apply_(fname3, [a, k, tuple(def_exprs)])), ctx}
+  end
+
+  # emits `name/2 = fun(ArgsList, KwMap) -> name/3(Args, Kw, Defaults)`,
+  # ensuring the module is initialized so top-level state is available
+  defp pub_wrapper(ctx, name, params) do
+    a = fresh()
+    k = fresh()
+
+    defaults = Enum.filter(params.pos ++ params.kwonly, fn {_, d, _} -> d != nil end)
+
+    {def_exprs, ctx} =
+      Enum.map_reduce(defaults, ctx, fn {_, d, _}, c -> compile_expr(c, d) end)
+
+    fname3 = fname(String.to_atom(name), 3)
+
+    w =
+      fun([a, k],
+        seq(
+          call(:slop_rt, :module_ensure_init, [lit(ctx.mod)]),
+          apply_(fname3, [a, k, tuple(def_exprs)])
+        )
+      )
+
+    {{fname(String.to_atom(name), 2), w}, ctx}
   end
 
   # =====================================================================
@@ -887,9 +923,12 @@ defmodule Slop.Codegen do
 
       globals_decl = globals_declared(body)
 
+      # names assigned in the inner body but present in the enclosing env
+      # capture their current value as the initial local binding (rebinds
+      # then apply to the local copy); only genuinely new locals are dropped
       inner_env =
         ctx.env
-        |> Map.drop(MapSet.to_list(locals))
+        |> Map.drop(MapSet.to_list(MapSet.difference(locals, env_names(ctx.env))))
         |> Map.put(name, {:rec, lfname, d_var})
 
       inner_ctx = %{
@@ -930,30 +969,54 @@ defmodule Slop.Codegen do
   end
 
   defp compile_stmt(ctx, {:import, _, mods}) do
-    Enum.reduce(mods, {lit(nil), ctx}, fn {mod, asname}, {acc, c} ->
-      mod_atom = String.to_atom(mod)
-      name = asname || hd(String.split(mod, "."))
-      ensure = call(:slop_rt, :module_ensure_init, [lit(mod_atom)])
+    Enum.reduce(mods, {lit(nil), ctx}, fn
+      {mod, asname}, {acc, c} ->
+        case foreign_mod(mod) do
+          nil ->
+            do_slop_import(acc, c, mod, asname)
 
-      if c.locals == nil do
-        c = %{c | mod_bindings: Map.put(c.mod_bindings, name, {:module, mod_atom})}
-
-        e =
-          seq(
-            ensure,
-            call(:slop_rt, :global_set, [
-              lit(c.mod),
-              lit(String.to_atom(name)),
-              lit(mod_atom)
-            ])
-          )
-
-        {seq(acc, e), c}
-      else
-        c = %{c | env: Map.put(c.env, name, {:module, mod_atom})}
-        {seq(acc, ensure), c}
-      end
+          erl_atom ->
+            # `import erlang.MOD` / `import elixir.MOD`: binds the last
+            # segment (or the as-name) to a foreign-module value
+            name = asname || List.last(String.split(mod, "."))
+            value = call(:slop_rt, :erl_mod, [lit(erl_atom)])
+            {e, c} = assign_name(c, name, value)
+            {seq(acc, e), c}
+        end
     end)
+  end
+
+  # maps an import path to a BEAM module atom, or nil for slop modules
+  defp foreign_mod("erlang." <> rest), do: String.to_atom(rest)
+
+  defp foreign_mod("elixir." <> rest),
+    do: String.to_atom("Elixir." <> String.trim_leading(rest, "Elixir."))
+
+  defp foreign_mod(_), do: nil
+
+  defp do_slop_import(acc, c, mod, asname) do
+    mod_atom = String.to_atom(mod)
+    name = asname || hd(String.split(mod, "."))
+    ensure = call(:slop_rt, :module_ensure_init, [lit(mod_atom)])
+
+    if c.locals == nil do
+      c = %{c | mod_bindings: Map.put(c.mod_bindings, name, {:module, mod_atom})}
+
+      e =
+        seq(
+          ensure,
+          call(:slop_rt, :global_set, [
+            lit(c.mod),
+            lit(String.to_atom(name)),
+            lit(mod_atom)
+          ])
+        )
+
+      {seq(acc, e), c}
+    else
+      c = %{c | env: Map.put(c.env, name, {:module, mod_atom})}
+      {seq(acc, ensure), c}
+    end
   end
 
   defp compile_stmt(ctx, {:from, _, mod, names}) do
@@ -2219,7 +2282,7 @@ defmodule Slop.Codegen do
 
     inner_ctx = %{
       ctx
-      | env: Map.drop(ctx.env, MapSet.to_list(locals)),
+      | env: Map.drop(ctx.env, MapSet.to_list(MapSet.difference(locals, env_names(ctx.env)))),
         locals: locals,
         globals_decl: MapSet.new(),
         loop: nil,
@@ -2431,6 +2494,8 @@ defmodule Slop.Codegen do
   end
 
   # ---------- names ----------
+
+  defp env_names(env), do: MapSet.new(Map.keys(env))
 
   defp read_name(ctx, n) do
     case ctx.env[n] do

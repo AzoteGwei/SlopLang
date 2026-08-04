@@ -57,6 +57,9 @@ defmodule Slop.Compiler do
     end
   end
 
+  defp foreign?(path),
+    do: String.starts_with?(path, "erlang.") or String.starts_with?(path, "elixir.")
+
   defp compile_imports(imports, from_file, search_path, entry, seen) do
     Enum.reduce_while(imports, {:ok, seen}, fn name, {:ok, acc} ->
       case find_module_file(name, Path.dirname(from_file), search_path) do
@@ -76,12 +79,14 @@ defmodule Slop.Compiler do
     stmts
     |> Enum.flat_map(fn
       {:import, _, mods} ->
-        Enum.map(mods, fn {dotted, _as} -> dotted |> String.split(".") |> hd() end)
+        mods
+        |> Enum.reject(fn {dotted, _as} -> foreign?(dotted) end)
+        |> Enum.map(fn {dotted, _as} -> dotted |> String.split(".") |> hd() end)
 
       {:from, _, mod, _names} ->
         mod = String.trim_leading(mod, ".")
 
-        if mod == "" do
+        if mod == "" or foreign?(mod) do
           []
         else
           [mod |> String.split(".") |> hd()]
