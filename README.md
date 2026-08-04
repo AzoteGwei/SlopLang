@@ -25,6 +25,10 @@ rebind rule, the pop protocol, by-value closures).
   tree-kill, `task_group` with fail-fast and collect modes, plus
   `send`/`recv` message passing — mapped to BEAM processes; 10 000
   tasks spawn and join in well under a second.
+- A 12-module standard library ([sloplib/](sloplib)): math, random,
+  hashlib, statistics, functools, itertools (on lazy streams),
+  collections, re, json, datetime, os, sys — each documented against
+  its PEP with BEAM deviations called out.
 - Hot reload: `sloplang.recompile(path)` swaps code in the running VM,
   and `app.run(debug=True)` gives the web dev server Flask-style
   source-watching reloads (broken edits keep serving the old version).

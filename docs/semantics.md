@@ -266,6 +266,31 @@ shared state should keep that state in ETS or a process (immutable values
 make instance-mutating registration invisible to later readers); see
 `sloplib/web.slop` and `examples/12_decorators.slop`.
 
+## The standard library (sloplib/)
+
+Twelve modules ship in `sloplib/`, all original SlopLang code (0BSD),
+importable by plain name (`import math`, `from functools import
+partial`). Each wraps an OTP service only where the primitive genuinely
+requires the VM; everything else is pure SlopLang. Stdlib module atoms
+are namespaced (`slop$math`) so they can never shadow OTP modules.
+
+| Module | Follows | Contents | Deliberate deviations |
+|---|---|---|---|
+| `math` | Python `math` | pi/e/tau, sqrt/pow/exp/log/log2/log10, trig, floor/ceil/trunc, fabs/fmod, isclose, gcd/lcm/factorial/isqrt, degrees/radians | no inf/nan/isinf/isnan: BEAM floats trap on overflow and divide-by-zero instead of producing inf/nan; no erf/gamma (not in OTP `:math`) |
+| `random` | Python `random` | seed, random, uniform, randint, randrange, choice, choices, shuffle, sample | PRNG state is per-process (BEAM process state), no getstate/setstate; shuffle returns a NEW list (immutability) |
+| `hashlib` | PEP 247 (`hashlib`) | new + update/digest/hexdigest; md5/sha1/sha224/sha256/sha384/sha512 constructors with optional data | algorithms limited to OTP `:crypto`; no shake/blake2 keyed variants; str input is UTF-8 |
+| `statistics` | PEP 450 | mean/fmean, median/median_low/median_high, mode/multimode, pvariance/variance, pstdev/stdev | ints/floats only (no Fraction/Decimal); no NormalDist |
+| `functools` | PEP 309 (`partial`) + `reduce`/`cache` | partial (positional+keyword), reduce, cache (ETS-backed), lru_cache (unbounded), compose | lru_cache accepts but does not enforce maxsize; no __wrapped__ introspection |
+| `itertools` | Python `itertools` | count/cycle/repeat/chain/islice/takewhile/dropwhile/accumulate/pairwise/zip_longest | built on SlopLang streams: lazy results are streams, not iterators; cycle materializes its source once; no combinatorics family yet |
+| `collections` | Python `collections` | Counter (update/most_common/elements/total/get, zero-default getitem), defaultdict(factory) | no OrderedDict: SlopLang dicts are unordered BEAM maps — documented, not faked; no namedtuple/deque yet |
+| `re` | Python `re` | compile/search/match/fullmatch/findall/sub/split/escape; Match with group/groups/start/end/span | engine is OTP `:re` (PCRE), not CPython's — edge syntax can differ; sub replaces all (no count); no groupdict; `match` is a soft keyword in SlopLang so `re.match(...)` works |
+| `json` | Python `json` | dumps/loads with the same default separators as web.slop | dict keys stringified on dump; non-container objects fall back to str(); no hooks; NaN/Infinity not representable |
+| `datetime` | Python `datetime` | date/time/datetime/timedelta, now/utcnow/today/fromtimestamp, isoformat/fromisoformat, weekday, timestamp round-trip | naive datetimes only — no tzinfo, so PEP 495 fold is N/A; strptime restricted to ISO 8601 |
+| `os` | Python `os` (selective) | getcwd/listdir/getenv/remove/rename/mkdir/makedirs/system_time + os.path (join/basename/dirname/split/splitext/exists/isfile/isdir/abspath/isabs) | POSIX process model (fork/exec/wait), uid/gid, signals: N/A, not faked |
+| `sys` | Python `sys` (selective) | platform/otp_release/version_info/maxsize | CPython interpreter introspection (refcounts, frames, recursion limit) is N/A; `argv()` and `exit()` stay builtins |
+
+See `examples/15_stdlib.slop` for a golden-output tour of all twelve.
+
 ## Hot reload
 
 SlopLang code can be swapped into a running VM without a restart.
